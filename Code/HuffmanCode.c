@@ -4,24 +4,20 @@
  * Compresor Huffman para archivos TXT grandes.
  *
  * Características:
- *  - No carga el archivo completo en memoria.
- *  - Trabaja directamente con bytes.
- *  - Compatible con UTF-8: á, é, í, ó, ú, ñ, ¿, ¡, etc.
- *  - Utiliza uint64_t para archivos grandes.
- *  - Procesa todos los archivos .txt de un directorio.
+ *
+ *  - Procesamiento por bloques.
+ *  - Compatible con UTF-8 y caracteres especiales.
+ *  - Huffman sobre los 256 posibles valores de byte.
+ *  - MD5 del archivo original.
+ *  - MD5 almacenado dentro del archivo .huff.
  *
  * Compilación:
  *
- *     gcc -Wall -Wextra -O2 huffman.c -o huffman
+ *     gcc -Wall -Wextra -O2 huffman.c -o huffman -lcrypto
  *
  * Uso:
  *
  *     ./huffman libros/
- *
- * Los archivos se generan como:
- *
- *     libro.txt
- *     libro.txt.huff
  */
 
 #include <stdio.h>
@@ -31,21 +27,32 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <limits.h>
-#include <errno.h>
+
+#include <openssl/md5.h>
 
 #define SYMBOLS 256
 #define MAX_CODE_LENGTH 256
+
 #define BUFFER_SIZE (1024 * 1024)
 
+/*
+ * Nuevo formato.
+ */
+#define MAGIC "HUF2"
+
+
 /* ============================================================
-   ESTRUCTURA DEL ÁRBOL DE HUFFMAN
+   NODO DE HUFFMAN
    ============================================================ */
 
 typedef struct HuffmanNode {
+
     unsigned char symbol;
+
     uint64_t frequency;
 
     struct HuffmanNode *left;
+
     struct HuffmanNode *right;
 
 } HuffmanNode;
@@ -56,9 +63,11 @@ typedef struct HuffmanNode {
    ============================================================ */
 
 typedef struct {
+
     HuffmanNode **nodes;
 
     int size;
+
     int capacity;
 
 } MinHeap;
@@ -78,7 +87,7 @@ typedef struct {
 
 
 /* ============================================================
-   FUNCIONES DE MEMORIA
+   MEMORIA
    ============================================================ */
 
 static void *safe_malloc(size_t size)
@@ -112,9 +121,11 @@ static HuffmanNode *create_node(
     node = safe_malloc(sizeof(HuffmanNode));
 
     node->symbol = symbol;
+
     node->frequency = frequency;
 
     node->left = left;
+
     node->right = right;
 
     return node;
@@ -122,7 +133,7 @@ static HuffmanNode *create_node(
 
 
 /* ============================================================
-   SABER SI ES HOJA
+   HOJA
    ============================================================ */
 
 static int is_leaf(HuffmanNode *node)
@@ -142,6 +153,7 @@ static void free_tree(HuffmanNode *root)
         return;
 
     free_tree(root->left);
+
     free_tree(root->right);
 
     free(root);
@@ -159,9 +171,12 @@ static MinHeap *create_heap(int capacity)
     heap = safe_malloc(sizeof(MinHeap));
 
     heap->nodes =
-        safe_malloc(sizeof(HuffmanNode *) * capacity);
+        safe_malloc(
+            sizeof(HuffmanNode *) * capacity
+        );
 
     heap->size = 0;
+
     heap->capacity = capacity;
 
     return heap;
@@ -172,11 +187,13 @@ static void swap_nodes(
         HuffmanNode **a,
         HuffmanNode **b)
 {
-    HuffmanNode *temp;
+    HuffmanNode *tmp;
 
-    temp = *a;
+    tmp = *a;
+
     *a = *b;
-    *b = temp;
+
+    *b = tmp;
 }
 
 
@@ -185,37 +202,17 @@ static void heap_push(
         HuffmanNode *node)
 {
     int i;
-    int parent;
 
-    if (heap->size >= heap->capacity) {
-
-        heap->capacity *= 2;
-
-        heap->nodes =
-            realloc(
-                heap->nodes,
-                sizeof(HuffmanNode *) *
-                heap->capacity
-            );
-
-        if (heap->nodes == NULL) {
-
-            fprintf(stderr,
-                    "Error de memoria.\n");
-
-            exit(EXIT_FAILURE);
-        }
-    }
+    heap->nodes[heap->size] = node;
 
     i = heap->size;
-
-    heap->nodes[i] = node;
 
     heap->size++;
 
     while (i > 0) {
 
-        parent = (i - 1) / 2;
+        int parent =
+            (i - 1) / 2;
 
         if (heap->nodes[parent]->frequency <=
             heap->nodes[i]->frequency) {
@@ -239,9 +236,6 @@ static HuffmanNode *heap_pop(
     HuffmanNode *result;
 
     int i;
-    int left;
-    int right;
-    int smallest;
 
     if (heap->size == 0)
         return NULL;
@@ -260,10 +254,13 @@ static HuffmanNode *heap_pop(
 
     while (1) {
 
-        left = 2 * i + 1;
-        right = 2 * i + 2;
+        int left =
+            2 * i + 1;
 
-        smallest = i;
+        int right =
+            2 * i + 2;
+
+        int smallest = i;
 
         if (left < heap->size &&
             heap->nodes[left]->frequency <
@@ -300,6 +297,7 @@ static void destroy_heap(MinHeap *heap)
         return;
 
     free(heap->nodes);
+
     free(heap);
 }
 
@@ -313,16 +311,14 @@ static HuffmanNode *build_tree(
 {
     MinHeap *heap;
 
-    HuffmanNode *left;
-    HuffmanNode *right;
-    HuffmanNode *parent;
-
     int i;
 
-    heap = create_heap(SYMBOLS);
+    heap =
+        create_heap(SYMBOLS);
+
 
     /*
-     * Crear una hoja por cada byte utilizado.
+     * Crear hojas.
      */
 
     for (i = 0; i < SYMBOLS; i++) {
@@ -331,20 +327,21 @@ static HuffmanNode *build_tree(
 
             HuffmanNode *node;
 
-            node = create_node(
-                (unsigned char)i,
-                frequencies[i],
-                NULL,
-                NULL
-            );
+            node =
+                create_node(
+                    (unsigned char)i,
+                    frequencies[i],
+                    NULL,
+                    NULL
+                );
 
-            heap_push(heap, node);
+            heap_push(
+                heap,
+                node
+            );
         }
     }
 
-    /*
-     * Archivo vacío.
-     */
 
     if (heap->size == 0) {
 
@@ -353,11 +350,10 @@ static HuffmanNode *build_tree(
         return NULL;
     }
 
+
     /*
      * Caso especial:
-     *
-     * El archivo solamente contiene
-     * un tipo de byte.
+     * solamente existe un byte.
      */
 
     if (heap->size == 1) {
@@ -366,43 +362,54 @@ static HuffmanNode *build_tree(
 
         only = heap_pop(heap);
 
-        parent = create_node(
-            0,
-            only->frequency,
-            only,
-            NULL
-        );
+        HuffmanNode *root =
+            create_node(
+                0,
+                only->frequency,
+                only,
+                NULL
+            );
 
         destroy_heap(heap);
 
-        return parent;
+        return root;
     }
 
+
     /*
-     * Construcción normal del árbol.
+     * Construcción del árbol.
      */
 
     while (heap->size > 1) {
 
-        left = heap_pop(heap);
-        right = heap_pop(heap);
+        HuffmanNode *left =
+            heap_pop(heap);
 
-        parent = create_node(
-            0,
-            left->frequency +
-            right->frequency,
-            left,
-            right
+        HuffmanNode *right =
+            heap_pop(heap);
+
+        HuffmanNode *parent =
+            create_node(
+                0,
+                left->frequency +
+                right->frequency,
+                left,
+                right
+            );
+
+        heap_push(
+            heap,
+            parent
         );
-
-        heap_push(heap, parent);
     }
 
-    parent = heap_pop(heap);
+
+    HuffmanNode *root =
+        heap_pop(heap);
 
     destroy_heap(heap);
 
-    return parent;
+    return root;
 }
 
 
@@ -419,15 +426,12 @@ static void generate_codes_recursive(
     if (node == NULL)
         return;
 
-    /*
-     * Si encontramos una hoja,
-     * hemos encontrado un código.
-     */
 
     if (is_leaf(node)) {
 
         /*
-         * Caso especial de un único símbolo.
+         * Si existe solamente un símbolo,
+         * asignamos el código 0.
          */
 
         if (depth == 0) {
@@ -436,6 +440,7 @@ static void generate_codes_recursive(
 
             depth = 1;
         }
+
 
         memcpy(
             codes[node->symbol].bits,
@@ -449,8 +454,9 @@ static void generate_codes_recursive(
         return;
     }
 
+
     /*
-     * Rama izquierda = 0
+     * Izquierda = 0
      */
 
     path[depth] = 0;
@@ -462,8 +468,9 @@ static void generate_codes_recursive(
         codes
     );
 
+
     /*
-     * Rama derecha = 1
+     * Derecha = 1
      */
 
     path[depth] = 1;
@@ -499,7 +506,7 @@ static void generate_codes(
 
 
 /* ============================================================
-   ESCRITURA DE BITS
+   BIT WRITER
    ============================================================ */
 
 typedef struct {
@@ -535,6 +542,7 @@ static void write_bit(
         writer->buffer |= 1;
 
     writer->bits++;
+
 
     if (writer->bits == 8) {
 
@@ -589,7 +597,7 @@ static void bitwriter_flush(
 
 
 /* ============================================================
-   ESCRIBIR UINT64
+   UINT64
    ============================================================ */
 
 static int write_uint64(
@@ -616,6 +624,129 @@ static int write_uint64(
 
 
 /* ============================================================
+   MD5
+   ============================================================ */
+
+/*
+ * Calcula el MD5 leyendo el archivo por bloques.
+ *
+ * md5_out debe tener 16 bytes.
+ */
+
+static int calculate_md5(
+        const char *filename,
+        unsigned char md5_out[MD5_DIGEST_LENGTH])
+{
+    FILE *file;
+
+    unsigned char buffer[BUFFER_SIZE];
+
+    size_t bytes_read;
+
+    MD5_CTX md5;
+
+
+    file = fopen(
+        filename,
+        "rb"
+    );
+
+    if (file == NULL) {
+
+        perror(filename);
+
+        return 0;
+    }
+
+
+    /*
+     * Inicializar MD5.
+     */
+
+    MD5_Init(&md5);
+
+
+    /*
+     * Procesar el archivo por bloques.
+     */
+
+    while ((bytes_read =
+            fread(
+                buffer,
+                1,
+                BUFFER_SIZE,
+                file
+            )) > 0) {
+
+        MD5_Update(
+            &md5,
+            buffer,
+            bytes_read
+        );
+    }
+
+
+    if (ferror(file)) {
+
+        fprintf(
+            stderr,
+            "Error leyendo %s\n",
+            filename
+        );
+
+        fclose(file);
+
+        return 0;
+    }
+
+
+    /*
+     * Obtener resultado final.
+     */
+
+    MD5_Final(
+        md5_out,
+        &md5
+    );
+
+
+    fclose(file);
+
+    return 1;
+}
+
+
+/* ============================================================
+   MD5 COMO TEXTO HEXADECIMAL
+   ============================================================ */
+
+static void md5_to_hex(
+        const unsigned char md5[16],
+        char hex[33])
+{
+    static const char digits[] =
+        "0123456789abcdef";
+
+    int i;
+
+    for (i = 0; i < 16; i++) {
+
+        hex[i * 2] =
+            digits[
+                (md5[i] >> 4) & 0x0F
+            ];
+
+        hex[i * 2 + 1] =
+            digits[
+                md5[i] & 0x0F
+            ];
+    }
+
+    hex[32] = '\0';
+}
+
+
+/* ============================================================
    CONTAR FRECUENCIAS
    ============================================================ */
 
@@ -638,7 +769,11 @@ static int count_frequencies(
 
     *total_bytes = 0;
 
-    file = fopen(filename, "rb");
+
+    file = fopen(
+        filename,
+        "rb"
+    );
 
     if (file == NULL) {
 
@@ -647,12 +782,6 @@ static int count_frequencies(
         return 0;
     }
 
-    /*
-     * Leer 1 MB cada vez.
-     *
-     * Esto es mucho más eficiente que utilizar
-     * fgetc() para archivos muy grandes.
-     */
 
     while ((bytes_read =
             fread(
@@ -676,11 +805,12 @@ static int count_frequencies(
         }
     }
 
+
     if (ferror(file)) {
 
         fprintf(
             stderr,
-            "Error leyendo: %s\n",
+            "Error leyendo %s\n",
             filename
         );
 
@@ -689,6 +819,7 @@ static int count_frequencies(
         return 0;
     }
 
+
     fclose(file);
 
     return 1;
@@ -696,7 +827,7 @@ static int count_frequencies(
 
 
 /* ============================================================
-   COMPRIMIR ARCHIVO
+   COMPRIMIR
    ============================================================ */
 
 static int compress_file(
@@ -705,6 +836,10 @@ static int compress_file(
     uint64_t frequencies[SYMBOLS];
 
     uint64_t original_size;
+
+    unsigned char md5[MD5_DIGEST_LENGTH];
+
+    char md5_hex[33];
 
     HuffmanNode *root;
 
@@ -724,8 +859,42 @@ static int compress_file(
 
 
     /*
-     * Primera pasada:
-     * contar frecuencias.
+     * ========================================================
+     * PASO 1
+     * Calcular MD5
+     * ========================================================
+     */
+
+    if (!calculate_md5(
+            filename,
+            md5)) {
+
+        return 0;
+    }
+
+
+    md5_to_hex(
+        md5,
+        md5_hex
+    );
+
+
+    printf(
+        "\nArchivo: %s\n",
+        filename
+    );
+
+    printf(
+        "MD5: %s\n",
+        md5_hex
+    );
+
+
+    /*
+     * ========================================================
+     * PASO 2
+     * Contar frecuencias
+     * ========================================================
      */
 
     if (!count_frequencies(
@@ -738,13 +907,7 @@ static int compress_file(
 
 
     /*
-     * Crear nombre:
-     *
-     * libro.txt
-     *
-     * ->
-     *
-     * libro.txt.huff
+     * Nombre del archivo comprimido.
      */
 
     snprintf(
@@ -754,10 +917,6 @@ static int compress_file(
         filename
     );
 
-
-    /*
-     * Crear archivo de salida.
-     */
 
     output =
         fopen(
@@ -774,20 +933,36 @@ static int compress_file(
 
 
     /*
-     * Encabezado.
+     * ========================================================
+     * ENCABEZADO
+     * ========================================================
      *
-     * HUF1
-     * tamaño original
-     * 256 frecuencias
+     * 4 bytes:
+     *     HUF2
+     *
+     * 8 bytes:
+     *     tamaño original
+     *
+     * 16 bytes:
+     *     MD5
+     *
+     * 2048 bytes:
+     *     frecuencias
+     *
+     * 256 * 8 = 2048
      */
 
     fwrite(
-        "HUF1",
+        MAGIC,
         1,
         4,
         output
     );
 
+
+    /*
+     * Tamaño original.
+     */
 
     if (!write_uint64(
             output,
@@ -798,6 +973,35 @@ static int compress_file(
         return 0;
     }
 
+
+    /*
+     * MD5.
+     *
+     * Se almacena directamente como
+     * 16 bytes binarios.
+     */
+
+    if (fwrite(
+            md5,
+            1,
+            MD5_DIGEST_LENGTH,
+            output
+        ) != MD5_DIGEST_LENGTH) {
+
+        fprintf(
+            stderr,
+            "Error escribiendo MD5.\n"
+        );
+
+        fclose(output);
+
+        return 0;
+    }
+
+
+    /*
+     * Tabla de frecuencias.
+     */
 
     for (i = 0;
          i < SYMBOLS;
@@ -815,8 +1019,7 @@ static int compress_file(
 
 
     /*
-     * Si el archivo está vacío,
-     * no necesitamos árbol.
+     * Archivo vacío.
      */
 
     if (original_size == 0) {
@@ -824,8 +1027,7 @@ static int compress_file(
         fclose(output);
 
         printf(
-            "Archivo vacío: %s\n",
-            filename
+            "Archivo vacío.\n"
         );
 
         return 1;
@@ -833,11 +1035,16 @@ static int compress_file(
 
 
     /*
-     * Construir árbol.
+     * ========================================================
+     * PASO 3
+     * Construir árbol
+     * ========================================================
      */
 
     root =
-        build_tree(frequencies);
+        build_tree(
+            frequencies
+        );
 
     if (root == NULL) {
 
@@ -848,7 +1055,7 @@ static int compress_file(
 
 
     /*
-     * Crear códigos.
+     * Generar códigos.
      */
 
     generate_codes(
@@ -858,8 +1065,10 @@ static int compress_file(
 
 
     /*
-     * Segunda pasada:
-     * codificar el archivo.
+     * ========================================================
+     * PASO 4
+     * Codificar
+     * ========================================================
      */
 
     input =
@@ -889,10 +1098,6 @@ static int compress_file(
         );
 
 
-        /*
-         * Leer 1 MB por vez.
-         */
-
         while ((bytes_read =
                 fread(
                     buffer,
@@ -917,23 +1122,6 @@ static int compress_file(
         }
 
 
-        if (ferror(input)) {
-
-            fprintf(
-                stderr,
-                "Error leyendo %s\n",
-                filename
-            );
-
-            fclose(input);
-            fclose(output);
-
-            free_tree(root);
-
-            return 0;
-        }
-
-
         /*
          * Completar último byte.
          */
@@ -952,8 +1140,7 @@ static int compress_file(
 
 
     printf(
-        "OK: %s -> %s\n",
-        filename,
+        "Comprimido: %s\n",
         output_filename
     );
 
@@ -976,7 +1163,9 @@ static void process_directory(
 
 
     dir =
-        opendir(directory);
+        opendir(
+            directory
+        );
 
     if (dir == NULL) {
 
@@ -991,8 +1180,11 @@ static void process_directory(
 
         struct stat st;
 
+        size_t len;
+
+
         /*
-         * Ignorar "." y ".."
+         * Ignorar . y ..
          */
 
         if (strcmp(
@@ -1010,7 +1202,7 @@ static void process_directory(
 
 
         /*
-         * Construir ruta.
+         * Ruta completa.
          */
 
         snprintf(
@@ -1021,10 +1213,6 @@ static void process_directory(
             entry->d_name
         );
 
-
-        /*
-         * Obtener información.
-         */
 
         if (stat(
                 path,
@@ -1038,7 +1226,7 @@ static void process_directory(
 
 
         /*
-         * Solamente archivos normales.
+         * Solo archivos normales.
          */
 
         if (!S_ISREG(st.st_mode))
@@ -1046,23 +1234,20 @@ static void process_directory(
 
 
         /*
-         * Solamente .txt
+         * Solo archivos .txt
          */
 
-        {
-            size_t len =
-                strlen(path);
+        len = strlen(path);
 
-            if (len < 4)
-                continue;
+        if (len < 4)
+            continue;
 
-            if (strcmp(
-                    path + len - 4,
-                    ".txt"
-                ) != 0) {
+        if (strcmp(
+                path + len - 4,
+                ".txt"
+            ) != 0) {
 
-                continue;
-            }
+            continue;
         }
 
 
@@ -1070,7 +1255,9 @@ static void process_directory(
          * Comprimir.
          */
 
-        compress_file(path);
+        compress_file(
+            path
+        );
     }
 
 
@@ -1091,12 +1278,9 @@ int main(
 
     if (argc != 2) {
 
-        printf(
-            "Uso:\n"
-            "  %s <directorio>\n\n"
-            "Ejemplo:\n"
-            "  %s libros/\n",
-            argv[0],
+        fprintf(
+            stderr,
+            "Uso: %s <directorio>\n",
             argv[0]
         );
 
