@@ -46,11 +46,8 @@ NODO - nodo del árbol Huffman
 ----------------------------------------------------------------*/
 
 typedef struct HuffmanNode {
-
     unsigned char symbol;       // Asegurar de que sea un numero entre 0 y 255
-
     uint64_t frequency;         // Para frecuencias grandes
-
     struct HuffmanNode *left, *right;
 
 } HuffmanNode;
@@ -60,23 +57,15 @@ typedef struct HuffmanNode {
 MIN HEAP - heap mínimo para construir el árbol Huffman
 ----------------------------------------------------------------*/
 typedef struct {
-
     HuffmanNode **nodes;
-
     int size;
-
     int capacity;
 
 } MinHeap;
 
-
-
 typedef struct {
-
     unsigned char bits[MAX_CODE_LENGTH];
-
     int length;
-
 } HuffmanCode;
 
 
@@ -126,6 +115,41 @@ static void free_tree(HuffmanNode *root)
 /*----------------------------------------------------------------
 UTILIDADES
 ----------------------------------------------------------------*/
+
+// CALCULAR FRECUENCIAS
+static int count_frequencies( const char *filename, uint64_t frequencies[SYMBOLS], uint64_t *total_bytes)
+{
+    FILE *file;
+    unsigned char buffer[BUFFER_SIZE];
+    size_t bytes_read;
+
+    memset( frequencies, 0, sizeof(uint64_t) * SYMBOLS);
+
+    *total_bytes = 0;
+    file = fopen( filename, "rb" );
+
+    if (file == NULL) {
+        perror(filename);
+        return 0;
+    }
+
+    while ((bytes_read = fread( buffer, 1, BUFFER_SIZE, file)) > 0) {
+        size_t i;
+        for (i = 0; i < bytes_read; i++) {
+            frequencies[ buffer[i] ]++;
+            (*total_bytes)++;
+        }
+    }
+
+    if (ferror(file)) {
+        fprintf( stderr, "Error leyendo %s\n", filename);
+        fclose(file);
+        return 0;
+    }
+
+    fclose(file);
+    return 1;
+}
 
 // CAMBIAR NODOS
 static void swap_nodes( HuffmanNode **a, HuffmanNode **b)
@@ -273,7 +297,7 @@ static HuffmanNode *build_tree( uint64_t frequencies[SYMBOLS]) // Dar tabla de f
 }
 
 /*----------------------------------------------------------------
-COMPRIMIR
+CODIFICAR
 ----------------------------------------------------------------*/
 
 static void compress_code( HuffmanNode *node, unsigned char path[], int depth, HuffmanCode codes[SYMBOLS])
@@ -324,84 +348,7 @@ static int write_uint64( FILE *file, uint64_t value)
 }
 
 
-/* ============================================================
-   CONTAR FRECUENCIAS
-   ============================================================ */
 
-static int count_frequencies(
-        const char *filename,
-        uint64_t frequencies[SYMBOLS],
-        uint64_t *total_bytes)
-{
-    FILE *file;
-
-    unsigned char buffer[BUFFER_SIZE];
-
-    size_t bytes_read;
-
-    memset(
-        frequencies,
-        0,
-        sizeof(uint64_t) * SYMBOLS
-    );
-
-    *total_bytes = 0;
-
-
-    file = fopen(
-        filename,
-        "rb"
-    );
-
-    if (file == NULL) {
-
-        perror(filename);
-
-        return 0;
-    }
-
-
-    while ((bytes_read =
-            fread(
-                buffer,
-                1,
-                BUFFER_SIZE,
-                file
-            )) > 0) {
-
-        size_t i;
-
-        for (i = 0;
-             i < bytes_read;
-             i++) {
-
-            frequencies[
-                buffer[i]
-            ]++;
-
-            (*total_bytes)++;
-        }
-    }
-
-
-    if (ferror(file)) {
-
-        fprintf(
-            stderr,
-            "Error leyendo %s\n",
-            filename
-        );
-
-        fclose(file);
-
-        return 0;
-    }
-
-
-    fclose(file);
-
-    return 1;
-}
 
 
 /* ============================================================
