@@ -1,10 +1,5 @@
-#define compress_directory serial_compress_directory
-#define compress_file pthread_compress_file
-#include "../Serial/Compressor.c"
-#undef compress_directory
-#undef compress_file
-
 #include "Compressor.h"
+#include "../Commons/Codec.h"
 #include <dirent.h>
 #include <limits.h>
 #include <pthread.h>
@@ -68,7 +63,7 @@ static void *compress_worker(void *argument)
         index = worker->state->next++;
         pthread_mutex_unlock(&worker->state->mutex);
 
-        ok = pthread_compress_file(worker->paths[index]);
+        ok = common_compress_file(worker->paths[index]);
         if (!ok) {
             pthread_mutex_lock(&worker->state->mutex);
             worker->state->success = 0;

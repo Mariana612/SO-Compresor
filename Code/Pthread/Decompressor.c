@@ -1,10 +1,5 @@
-#define decompress_file pthread_decompress_file
-#define decompress_directory serial_decompress_directory
-#include "../Serial/Decompressor.c"
-#undef decompress_file
-#undef decompress_directory
-
 #include "Decompressor.h"
+#include "../Commons/Codec.h"
 #include <dirent.h>
 #include <limits.h>
 #include <pthread.h>
@@ -69,7 +64,7 @@ static void *decompress_worker(void *argument)
         index = worker->state->next++;
         pthread_mutex_unlock(&worker->state->mutex);
 
-        ok = pthread_decompress_file(worker->paths[index], worker->output_directory);
+        ok = common_decompress_file(worker->paths[index], worker->output_directory);
         if (!ok) {
             pthread_mutex_lock(&worker->state->mutex);
             worker->state->success = 0;

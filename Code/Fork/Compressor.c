@@ -1,10 +1,5 @@
-#define compress_directory serial_compress_directory
-#define compress_file fork_compress_file
-#include "../Serial/Compressor.c"
-#undef compress_directory
-#undef compress_file
-
 #include "Compressor.h"
+#include "../Commons/Codec.h"
 #include <dirent.h>
 #include <limits.h>
 #include <stdio.h>
@@ -85,7 +80,7 @@ int compress_directory(const char *directory)
             if (children[active] == 0) {
                 WorkerResult result;
                 close(pipes[active][0]);
-                result.ok = fork_compress_file(paths[next]);
+                result.ok = common_compress_file(paths[next]);
                 snprintf(result.filename, sizeof(result.filename), "%s", paths[next]);
                 (void)write(pipes[active][1], &result, sizeof(result));
                 close(pipes[active][1]);

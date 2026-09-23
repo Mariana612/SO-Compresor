@@ -1,5 +1,5 @@
-#ifndef HUFFMAN_TREE_H
-#define HUFFMAN_TREE_H
+#ifndef COMMONS_HUFFMAN_TREE_H
+#define COMMONS_HUFFMAN_TREE_H
 
 #include <stdint.h>
 

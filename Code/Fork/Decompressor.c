@@ -1,10 +1,5 @@
-#define decompress_file serial_decompress_file
-#define decompress_directory serial_decompress_directory
-#include "../Serial/Decompressor.c"
-#undef decompress_file
-#undef decompress_directory
-
 #include "Decompressor.h"
+#include "../Commons/Codec.h"
 #include <dirent.h>
 #include <limits.h>
 #include <stdio.h>
@@ -43,11 +38,6 @@ static int add_path(char (**paths)[PATH_MAX], size_t *count, size_t *capacity,
     snprintf((*paths)[*count], PATH_MAX, "%s", path);
     (*count)++;
     return 1;
-}
-
-int decompress_file(const char *compressed_filename, const char *output_directory)
-{
-    return serial_decompress_file(compressed_filename, output_directory);
 }
 
 int decompress_directory(const char *directory, const char *output_directory)
@@ -89,7 +79,7 @@ int decompress_directory(const char *directory, const char *output_directory)
             if (children[active] == 0) {
                 WorkerResult result;
                 close(pipes[active][0]);
-                result.ok = serial_decompress_file(paths[next], output_directory);
+                result.ok = common_decompress_file(paths[next], output_directory);
                 (void)write(pipes[active][1], &result, sizeof(result));
                 close(pipes[active][1]);
                 _exit(result.ok ? EXIT_SUCCESS : EXIT_FAILURE);

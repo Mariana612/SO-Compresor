@@ -2,54 +2,39 @@
 
 ## Compresor Huffman + MD5
 
-`HuffmanCode.c` comprime todos los archivos `.txt` que estén directamente
-dentro de un directorio. El archivo `.huff` guarda, para cada documento, su
-nombre, tamaño, tabla de frecuencias Huffman, bits comprimidos y firma MD5 del
-contenido original. MD5 detecta cambios accidentales; no es un mecanismo de
-seguridad criptográfica.
-El programa comprime todos los archivos `.txt` que estén directamente dentro
-de un directorio. El archivo `.huff` guarda, para cada documento, su tamaño,
-tabla de frecuencias Huffman, bits comprimidos y firma MD5 del contenido
-original. MD5 detecta cambios accidentales; no es un mecanismo de seguridad
-criptográfica.
+El programa comprime todos los archivos `.txt` directamente dentro de un
+directorio. Cada `.huff` conserva el tamaño, la tabla de frecuencias Huffman,
+los bits comprimidos y la firma MD5 del contenido original. MD5 detecta cambios
+accidentales; no es un mecanismo de seguridad criptográfica.
 
 ## Requisitos
 
 Se requiere un compilador C11 (`gcc`), las bibliotecas POSIX de Linux y
 OpenSSL `libcrypto` para generar MD5 mediante su biblioteca, sin implementar el
 algoritmo manualmente. No es necesario crear un usuario nuevo.
-gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
-	-o huffman-md5 Code/main.c Code/Compressor.c Code/Decompressor.c \
-	Code/HuffmanTree.c Code/MD5Utils.c -lcrypto
-`gcc`, con:
-
 ```bash
 sudo apt-get install build-essential
-./huffman-md5 c Eliminar/gutenberg_txt
-./huffman-md5 d Eliminar/gutenberg_txt/pg11.txt.huff Eliminar/gutenberg_txt
-
-Si `gcc` ya está instalado, este paso no es necesario.
-
-El paquete `libssl-dev`, que proporciona los headers y la biblioteca `libcrypto`,
-se instala con:
-
-La descompresión verifica el MD5 y elimina el archivo generado si la
-verificación falla.
+sudo apt-get install libssl-dev
 ```
 
 ## Compilar
 
-Desde la raíz del proyecto:
+Desde la raíz del proyecto, para la variante serial:
 
 ```bash
 gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
-	-o huffman-md5 Eliminar/Code/HuffmanCode.c -lcrypto
+	-I Code/Commons -o huffman-serial Code/Serial/main.c \
+	Code/Serial/Compressor.c Code/Serial/Decompressor.c \
+	Code/Commons/Codec.c Code/Commons/HuffmanTree.c \
+	Code/Commons/MD5Utils.c -lcrypto
 ```
 
 ## Uso
 
 ```bash
-./huffman-md5 Eliminar/gutenberg_txt gutenberg.huff
+./huffman-serial c Eliminar/gutenberg_txt
+mkdir -p Eliminar/gutenberg_txt_serial
+./huffman-serial d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_serial
 ```
 
 La carpeta `Eliminar/gutenberg_txt` contiene los 100 documentos `.txt` y el
@@ -64,6 +49,13 @@ La implementación serial también permite descomprimir todos los archivos
 ./huffman-serial d <directorio_huff> <directorio_salida>
 ```
 
+## Código compartido
+
+`Code/Commons` contiene la implementación única del formato HUF2: árbol
+Huffman, MD5 y compresión/descompresión de un archivo. Las carpetas `Serial`,
+`Fork` y `Pthread` solo contienen sus respectivos recorridos o estrategias de
+concurrencia y se enlazan contra esos módulos comunes.
+
 ## Variante paralela con fork
 
 La implementación paralela está en `Code/Fork`. El padre crea hijos para
@@ -73,9 +65,9 @@ disponibles, con un límite de 64.
 
 ```bash
 gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
-	-I Code/Fork -o huffman-fork Code/Fork/main.c Code/Fork/Compressor.c \
-	Code/Fork/Decompressor.c Code/Fork/HuffmanTree.c Code/Fork/MD5Utils.c \
-	-lcrypto
+	-I Code/Commons -o huffman-fork Code/Fork/main.c Code/Fork/Compressor.c \
+	Code/Fork/Decompressor.c Code/Commons/Codec.c \
+	Code/Commons/HuffmanTree.c Code/Commons/MD5Utils.c -lcrypto
 ./huffman-fork c Eliminar/gutenberg_txt
 mkdir -p Eliminar/gutenberg_txt_descomprimido
 ./huffman-fork d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_descomprimido
@@ -92,9 +84,10 @@ global, protegidos por un mutex de `pthread`.
 
 ```bash
 gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
-	-I Code/Pthread -o huffman-pthread Code/Pthread/main.c \
+	-I Code/Commons -o huffman-pthread Code/Pthread/main.c \
 	Code/Pthread/Compressor.c Code/Pthread/Decompressor.c \
-	Code/Pthread/HuffmanTree.c Code/Pthread/MD5Utils.c -lcrypto -pthread
+	Code/Commons/Codec.c Code/Commons/HuffmanTree.c \
+	Code/Commons/MD5Utils.c -lcrypto -pthread
 ./huffman-pthread c Eliminar/gutenberg_txt
 mkdir -p Eliminar/gutenberg_txt_pthread
 ./huffman-pthread d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_pthread
