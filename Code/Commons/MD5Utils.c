@@ -3,64 +3,71 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MD5_BUFFER_SIZE (1024 * 1024)
+#define MD5_BLOCK_SIZE 65536   // Bytes que se leen del archivo en cada vuelta
 
+// Calcular MD5 - Calcula la firma MD5 de un archivo usando OpenSSL
 int calculate_md5(const char *filename, unsigned char md5_out[MD5_DIGEST_LENGTH])
 {
-    FILE *file;
-    unsigned char buffer[MD5_BUFFER_SIZE];
+    unsigned char block[MD5_BLOCK_SIZE];
     size_t bytes_read;
-    EVP_MD_CTX *md5;
-    int ok = 0;
+    EVP_MD_CTX *context;
+    FILE *file = fopen(filename, "rb");
 
-    file = fopen(filename, "rb");
     if (file == NULL) {
-        perror(filename);
+        fprintf(stderr, "Error: no se pudo abrir %s\n", filename);
         return 0;
     }
-    md5 = EVP_MD_CTX_new();
-    if (md5 == NULL || EVP_DigestInit_ex(md5, EVP_md5(), NULL) != 1)
-        goto done;
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0)
-        if (EVP_DigestUpdate(md5, buffer, bytes_read) != 1)
-            goto done;
-    if (ferror(file)) {
-        fprintf(stderr, "Error leyendo %s\n", filename);
-        goto done;
+
+    // El "contexto" guarda el cálculo del MD5 mientras se va leyendo el archivo
+    context = EVP_MD_CTX_new();
+    if (context == NULL) {
+        fclose(file);
+        return 0;
     }
-    ok = EVP_DigestFinal_ex(md5, md5_out, NULL) == 1;
-done:
-    EVP_MD_CTX_free(md5);
+    EVP_DigestInit_ex(context, EVP_md5(), NULL);
+
+    // Se le pasa el archivo al MD5 por bloques
+    while ((bytes_read = fread(block, 1, MD5_BLOCK_SIZE, file)) > 0)
+        EVP_DigestUpdate(context, block, bytes_read);
+
+    // Al final se obtiene la firma de 16 bytes
+    EVP_DigestFinal_ex(context, md5_out, NULL);
+
+    EVP_MD_CTX_free(context);
     fclose(file);
-    return ok;
+    return 1;
 }
 
+// MD5 a texto - Convierte los 16 bytes en 32 caracteres hexadecimales para imprimirlos
 void md5_to_hex(const unsigned char md5[MD5_DIGEST_LENGTH], char hex[33])
 {
-    static const char digits[] = "0123456789abcdef";
-    int index;
-    for (index = 0; index < MD5_DIGEST_LENGTH; index++) {
-        hex[index * 2] = digits[(md5[index] >> 4) & 0x0F];
-        hex[index * 2 + 1] = digits[md5[index] & 0x0F];
-    }
-    hex[32] = '\0';
+    int i;
+
+    // Cada byte se escribe como 2 caracteres, ej. 255 -> "ff"
+    for (i = 0; i < MD5_DIGEST_LENGTH; i++)
+        sprintf(hex + i * 2, "%02x", md5[i]);
 }
 
-/* Imprime una sola línea por archivo para que la salida de varios hilos o
- * procesos no se entremezcle. */
+// Verificar MD5 - Calcula el MD5 del archivo y lo compara con el guardado.
+// Imprime una sola línea por archivo para que los mensajes de varios hilos o
+// procesos no se mezclen.
 int verify_md5(const char *filename, const unsigned char expected_md5[MD5_DIGEST_LENGTH])
 {
     unsigned char calculated_md5[MD5_DIGEST_LENGTH];
     char calculated_hex[33], expected_hex[33];
+
     if (!calculate_md5(filename, calculated_md5))
         return 0;
+
     md5_to_hex(calculated_md5, calculated_hex);
     md5_to_hex(expected_md5, expected_hex);
+
     if (memcmp(calculated_md5, expected_md5, MD5_DIGEST_LENGTH) != 0) {
         printf("ERROR MD5 %s: almacenado %s, calculado %s\n", filename, expected_hex,
                calculated_hex);
         return 0;
     }
+
     printf("MD5 verificado %s (%s)\n", filename, calculated_hex);
     return 1;
 }

@@ -22,7 +22,7 @@ typedef struct {
 
 typedef struct {
     SharedState *state;
-    char (*paths)[PATH_MAX];
+    char **paths;
 } WorkerArgs;
 
 static int thread_count(void)

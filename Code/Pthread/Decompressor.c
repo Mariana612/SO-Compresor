@@ -22,7 +22,7 @@ typedef struct {
 
 typedef struct {
     SharedState *state;
-    char (*paths)[PATH_MAX];
+    char **paths;
     const char *output_directory;
 } WorkerArgs;
 
