@@ -1,2 +1,11 @@
-
+# Archivos comprimidos
 *.huff
+
+# Binarios
+huffman
+huffman-*
+interfaz
+Interfaz/compresor
+
+# Python
+__pycache__/

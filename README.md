@@ -2,16 +2,20 @@
 
 ## Compresor Huffman + MD5
 
-El programa comprime todos los archivos regulares directamente dentro de un
-directorio (excepto los `.huff` ya comprimidos). Cada `.huff` conserva el tamaño, la tabla de frecuencias Huffman,
-los bits comprimidos y la firma MD5 del contenido original. MD5 detecta cambios
-accidentales; no es un mecanismo de seguridad criptográfica.
+El programa comprime todos los archivos regulares que están directamente dentro
+de un directorio (ignora subdirectorios y archivos `.huff`) y los guarda en **un
+solo archivo `.huff`**. Por cada archivo se calcula su firma MD5 antes de
+comprimirlo y se guarda en la tabla de metadatos del `.huff`, junto con su nombre,
+tamaños y tabla de frecuencias Huffman. Al descomprimir, se expande el `.huff` en
+el directorio indicado, se recalcula el MD5 de cada archivo y se compara con el
+guardado. MD5 detecta cambios accidentales; no es un mecanismo de seguridad
+criptográfica.
 
 ## Requisitos
 
-Se requiere un compilador C11 (`gcc`), las bibliotecas POSIX de Linux y
+Se requiere un compilador C11 (`gcc`), `make`, las bibliotecas POSIX de Linux y
 OpenSSL `libcrypto` para generar MD5 mediante su biblioteca, sin implementar el
-algoritmo manualmente. No es necesario crear un usuario nuevo.
+algoritmo manualmente.
 ```bash
 sudo apt-get install build-essential
 sudo apt-get install libssl-dev
@@ -19,84 +23,89 @@ sudo apt-get install libssl-dev
 
 ## Compilar
 
-Desde la raíz del proyecto, para la variante serial:
+Desde la raíz del proyecto:
 
 ```bash
-gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
-	-I Code/Commons -o huffman-serial Code/Serial/main.c \
-	Code/Serial/Compressor.c Code/Serial/Decompressor.c \
-	Code/Commons/Codec.c Code/Commons/HuffmanTree.c \
-	Code/Commons/MD5Utils.c Code/Commons/FileList.c -lcrypto
+make            # las tres variantes: huffman-serial, huffman-fork, huffman-pthread
+make fork       # solo una variante (serial, fork o pthread)
+make clean
 ```
 
 ## Uso
 
-```bash
-./huffman-serial c Eliminar/gutenberg_txt
-mkdir -p Eliminar/gutenberg_txt_serial
-./huffman-serial d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_serial
-```
-
-La carpeta `Eliminar/gutenberg_txt` contiene los 100 documentos `.txt` y el
-programa los procesa uno por uno. Ignora subdirectorios y archivos `.huff`.
-Cada `.huff` se escribe junto a su archivo original.
-
-En las tres variantes, `d` acepta un directorio de archivos `.huff` o un único
-archivo `.huff`, y verifica el MD5 de cada resultado:
+Las tres variantes aceptan los mismos argumentos y generan exactamente el mismo
+`.huff`, así que lo que comprime una lo puede descomprimir cualquiera de las otras.
 
 ```bash
-./huffman-serial d <directorio_huff | archivo.huff> <directorio_salida>
+./huffman-serial c <directorio> [archivo.huff]
+./huffman-serial d <archivo.huff> <directorio_salida>
 ```
+
+Si no se indica el nombre del `.huff`, se usa `<directorio>.huff` al lado del
+directorio. El directorio de salida se crea si no existe. Al terminar se imprime
+el tiempo total, para comparar las variantes.
+
+```bash
+./huffman-serial c Eliminar/gutenberg_txt           # crea Eliminar/gutenberg_txt.huff
+./huffman-serial d Eliminar/gutenberg_txt.huff Eliminar/gutenberg_txt_serial
+```
+
+La carpeta `Eliminar/gutenberg_txt` contiene los 100 documentos `.txt` (ver
+`Eliminar/Readme-Scraper.md`). `Eliminar/Eliminar_txt.py` borra los `.huff` generados.
+
+## Formato del archivo `.huff` (HUF3)
+
+```
+| "HUF3" | cantidad N | tabla de N entradas | datos comprimidos de cada archivo |
+entrada: nombre (256 B) | tamaño original | tamaño comprimido | offset de datos | MD5 (16 B) | frecuencias (256 x 8 B)
+```
+
+El tamaño comprimido de cada archivo se calcula antes de codificarlo
+(`Σ frecuencia × largo del código`, redondeado a bytes). Por eso la compresión
+tiene dos fases:
+
+1. **Análisis:** MD5, frecuencias y tamaño comprimido de cada archivo.
+2. **Codificación:** con los offsets ya asignados y la tabla escrita al inicio del
+   `.huff`, cada archivo se escribe en su propia región del `.huff`.
+
+Como las regiones no se solapan, cada fase se puede repartir entre procesos o
+hilos. Al descomprimir, cada trabajador lee la región de su archivo, lo expande
+y verifica su MD5.
 
 ## Código compartido
 
-`Code/Commons` contiene la implementación única del formato HUF2: árbol
-Huffman, MD5 (API EVP de OpenSSL), listado de archivos de un directorio y
-compresión/descompresión de un archivo. Las carpetas `Serial`,
-`Fork` y `Pthread` solo contienen sus respectivos recorridos o estrategias de
-concurrencia y se enlazan contra esos módulos comunes.
+`Code/Commons` contiene todo lo común:
+- `HuffmanTree`: árbol y códigos de Huffman.
+- `MD5Utils`: MD5 con la API EVP de OpenSSL.
+- `FileList`: listado de los archivos de un directorio.
+- `Codec`: formato HUF3 y compresión/descompresión de cada archivo.
+- `Cli`: argumentos y medición de tiempo.
+
+Las carpetas `Serial`, `Fork` y `Pthread` solo contienen su forma de repartir
+el trabajo.
+
+## Variante serial
+
+`Code/Serial` procesa los archivos uno por uno.
 
 ## Variante paralela con fork
 
-La implementación paralela está en `Code/Fork`. El padre crea hijos para
-procesar archivos independientes y recibe el resultado de cada hijo mediante
-una pipe. El padre recoge con `waitpid(-1)` al primer hijo que termine, de modo
-que un archivo grande no bloquea el lanzamiento de nuevos hijos. La cantidad
-máxima de hijos se ajusta al número de procesadores
-disponibles, con un límite de 64.
+`Code/Fork/ProcessPool.c` crea un proceso hijo por archivo, con a lo sumo un
+hijo por procesador (máximo 64) trabajando a la vez. El padre recoge con
+`waitpid(-1)` al primer hijo que termine, así que un archivo grande no frena el
+lanzamiento de nuevos hijos.
 
-```bash
-gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
-	-I Code/Commons -o huffman-fork Code/Fork/main.c Code/Fork/Compressor.c \
-	Code/Fork/Decompressor.c Code/Commons/Codec.c \
-	Code/Commons/HuffmanTree.c Code/Commons/MD5Utils.c \
-	Code/Commons/FileList.c -lcrypto
-./huffman-fork c Eliminar/gutenberg_txt
-mkdir -p Eliminar/gutenberg_txt_descomprimido
-./huffman-fork d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_descomprimido
-```
-
-Con un directorio, los archivos se descomprimen en paralelo y se verifica el MD5
-de cada resultado.
+La comunicación entre procesos (IPC) se hace con una **pipe por hijo**:
+- En la fase de análisis, el hijo le manda al padre por la pipe la entrada
+  completa de su archivo (MD5, frecuencias y tamaños). Con eso el padre arma la
+  tabla del `.huff`.
+- En la codificación y en la descompresión, el hijo manda por la pipe si su
+  archivo se procesó y verificó correctamente.
 
 ## Variante concurrente con pthread
 
-La implementación con hilos está en `Code/Pthread`. Usa una región de memoria
-compartida creada con `mmap` para mantener la cola de trabajos y el estado
-global, protegidos por un mutex de `pthread`.
-
-```bash
-gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
-	-I Code/Commons -o huffman-pthread Code/Pthread/main.c \
-	Code/Pthread/Compressor.c Code/Pthread/Decompressor.c \
-	Code/Commons/Codec.c Code/Commons/HuffmanTree.c \
-	Code/Commons/MD5Utils.c Code/Commons/FileList.c -lcrypto -pthread
-./huffman-pthread c Eliminar/gutenberg_txt
-mkdir -p Eliminar/gutenberg_txt_pthread
-./huffman-pthread d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_pthread
-```
-
-La compresión y la descompresión procesan todos los archivos compatibles del
-directorio usando los hilos disponibles, con un máximo de 64 trabajadores.
-
-#
+`Code/Pthread/ThreadPool.c` crea un hilo por procesador (máximo 64). Los hilos
+toman trabajo de una cola ubicada en una **región de memoria compartida creada con
+`mmap`** y protegida por un mutex de `pthread`. En la compresión, la tabla de
+metadatos también vive en memoria compartida: cada hilo escribe ahí la entrada de
+su archivo y el hilo principal la usa para escribir la cabecera del `.huff`.

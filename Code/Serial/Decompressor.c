@@ -1,18 +1,19 @@
 #include "Decompressor.h"
 #include "../Commons/Codec.h"
-#include "../Commons/FileList.h"
 
-int decompress_directory(const char *directory, const char *output_directory)
+#include <stdlib.h>
+
+int decompress_archive(const char *archive, const char *output_directory)
 {
-    FileList files;
-    size_t index;
+    ArchiveEntry *entries;
+    size_t count, index;
     int success = 1;
 
-    if (!file_list_load(directory, 1, &files))
+    if (!codec_read_header(archive, &entries, &count))
         return 0;
-    for (index = 0; index < files.count; index++)
-        if (!common_decompress_file(files.paths[index], output_directory))
+    for (index = 0; index < count; index++)
+        if (!codec_decode_entry(archive, &entries[index], output_directory))
             success = 0;
-    file_list_free(&files);
+    free(entries);
     return success;
 }

@@ -1,107 +1,39 @@
 #include "Compressor.h"
+#include "ProcessPool.h"
 #include "../Commons/Codec.h"
 #include "../Commons/FileList.h"
-#include <stdio.h>
 #include <stdlib.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-#define MAX_CHILDREN 64
 
 // ============================================================
 // ESTRUCTURAS DE DATOS
 // ============================================================
 
-// hijo
+// Lo que necesitan los hijos. Cada hijo recibe una copia al hacer fork()
 typedef struct {
-    pid_t pid;
-    int pipe_read;
-} Child;
+    char **paths;
+    const char *archive;
+    ArchiveEntry *entries;
+} CompressJob;
 
 
 // ============================================================
-// FUNCIONES AUXILIARES
+// TAREAS DE LOS HIJOS
 // ============================================================
 
-// Cantidad de hijos - Un hijo por núcleo del procesador
-static int get_children_limit(void)
+// Fase 1 - El hijo analiza su archivo y le manda al padre la ArchiveEntry
+// completa (MD5, frecuencias y tamaños) por la pipe
+static int analyze_task(size_t index, void *context, void *result)
 {
-    long cores = sysconf(_SC_NPROCESSORS_ONLN);
-
-    if (cores < 1)
-        cores = 1;
-    if (cores > MAX_CHILDREN)
-        cores = MAX_CHILDREN;
-    return (int)cores;
+    CompressJob *job = context;
+    return codec_analyze_file(job->paths[index], result);
 }
 
-// Crear hijo - Crea un proceso que comprime un archivo y avisa el resultado
-
-static int start_child(Child children[], int *active, const char *path)
+// Fase 2 - El hijo escribe los datos comprimidos de su archivo en su región del .huff
+static int encode_task(size_t index, void *context, void *result)
 {
-    int fds[2];   
-    pid_t pid;
-    int ok, i;
-
-    if (pipe(fds) != 0)
-        return 0;
-
-
-    fflush(stdout);
-    pid = fork();
-
-    if (pid < 0) {
-        close(fds[0]);
-        close(fds[1]);
-        return 0;
-    }
-
-    if (pid == 0) {
-        // --- Código del HIJO - cierra la lectura de su pipe y las de sus hermanos
-        close(fds[0]);
-        for (i = 0; i < *active; i++)
-            close(children[i].pipe_read);
-
-        ok = common_compress_file(path);
-        fflush(stdout);
-
-        // Le manda el resultado (1 = bien, 0 = error) al padre y termina
-        if (write(fds[1], &ok, sizeof(int)) != sizeof(int))
-            ok = 0;
-        close(fds[1]);
-        _exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
-    }
-
-    // --- Código PADRE - cierra la escritura y guarda al hijo en la lista
-    close(fds[1]); 
-    children[*active].pid = pid;
-    children[*active].pipe_read = fds[0];
-    (*active)++;
-    return 1;
-}
-
-// Esperar hijo 
-static int wait_for_child(Child children[], int *active)
-{
-    int ok = 0, slot = 0, i;
-    pid_t pid;
-
-  
-    pid = waitpid(-1, NULL, 0); // ESPERA HIJO
-
-    for (i = 0; i < *active; i++) { // posicion de la lista
-        if (children[i].pid == pid)
-            slot = i;
-    }
-
-
-    if (read(children[slot].pipe_read, &ok, sizeof(int)) != sizeof(int)) // check
-        ok = 0;
-    close(children[slot].pipe_read);
-
-    children[slot] = children[*active - 1];
-    (*active)--;
-    return ok;
+    CompressJob *job = context;
+    (void)result;
+    return codec_encode_file(job->paths[index], job->archive, &job->entries[index]);
 }
 
 
@@ -110,40 +42,38 @@ static int wait_for_child(Child children[], int *active)
 // ============================================================
 
 // Comprimir directorio - Reparte los archivos entre varios procesos hijos
-int compress_directory(const char *directory)
+int compress_directory(const char *directory, const char *archive)
 {
     FileList files;
-    Child children[MAX_CHILDREN];
-    int active = 0;          
-    int success = 1;
-    int limit = get_children_limit();
-    size_t next = 0;         
+    CompressJob job;
+    int success;
 
     if (!file_list_load(directory, 0, &files))
         return 0;
 
-
-    while (next < files.count || active > 0) {
-
-        // Si hay lugar y quedan archivos
-        if (active < limit && next < files.count) {
-            if (start_child(children, &active, files.paths[next])) {
-                next++;
-                continue;
-            }
-            // No se pudo crear el hijo
-            fprintf(stderr, "Error: no se pudo crear un proceso hijo\n");
-            if (active == 0) {
-                success = 0;
-                break;
-            }
-        }
-
-        // espera a terminar
-        if (!wait_for_child(children, &active))
-            success = 0;
+    job.paths = files.paths;
+    job.archive = archive;
+    job.entries = calloc(files.count > 0 ? files.count : 1, sizeof(ArchiveEntry));
+    if (job.entries == NULL) {
+        file_list_free(&files);
+        return 0;
     }
 
+    // Fase 1 en paralelo: los metadatos llegan al padre por las pipes
+    success = process_pool_run(files.count, analyze_task, &job, job.entries,
+                               sizeof(ArchiveEntry));
+
+    // El padre arma la tabla y la escribe al inicio del .huff
+    if (success) {
+        codec_assign_offsets(job.entries, files.count);
+        success = codec_write_header(archive, job.entries, files.count);
+    }
+
+    // Fase 2 en paralelo: los hijos heredan la tabla con los offsets ya asignados
+    if (success)
+        success = process_pool_run(files.count, encode_task, &job, NULL, 0);
+
+    free(job.entries);
     file_list_free(&files);
     return success;
 }
