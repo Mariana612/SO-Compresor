@@ -1,4 +1,5 @@
 #include "MD5Utils.h"
+#include <openssl/evp.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -9,24 +10,29 @@ int calculate_md5(const char *filename, unsigned char md5_out[MD5_DIGEST_LENGTH]
     FILE *file;
     unsigned char buffer[MD5_BUFFER_SIZE];
     size_t bytes_read;
-    MD5_CTX md5;
+    EVP_MD_CTX *md5;
+    int ok = 0;
 
     file = fopen(filename, "rb");
     if (file == NULL) {
         perror(filename);
         return 0;
     }
-    MD5_Init(&md5);
+    md5 = EVP_MD_CTX_new();
+    if (md5 == NULL || EVP_DigestInit_ex(md5, EVP_md5(), NULL) != 1)
+        goto done;
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0)
-        MD5_Update(&md5, buffer, bytes_read);
+        if (EVP_DigestUpdate(md5, buffer, bytes_read) != 1)
+            goto done;
     if (ferror(file)) {
         fprintf(stderr, "Error leyendo %s\n", filename);
-        fclose(file);
-        return 0;
+        goto done;
     }
-    MD5_Final(md5_out, &md5);
+    ok = EVP_DigestFinal_ex(md5, md5_out, NULL) == 1;
+done:
+    EVP_MD_CTX_free(md5);
     fclose(file);
-    return 1;
+    return ok;
 }
 
 void md5_to_hex(const unsigned char md5[MD5_DIGEST_LENGTH], char hex[33])
@@ -40,6 +46,8 @@ void md5_to_hex(const unsigned char md5[MD5_DIGEST_LENGTH], char hex[33])
     hex[32] = '\0';
 }
 
+/* Imprime una sola línea por archivo para que la salida de varios hilos o
+ * procesos no se entremezcle. */
 int verify_md5(const char *filename, const unsigned char expected_md5[MD5_DIGEST_LENGTH])
 {
     unsigned char calculated_md5[MD5_DIGEST_LENGTH];
@@ -48,12 +56,11 @@ int verify_md5(const char *filename, const unsigned char expected_md5[MD5_DIGEST
         return 0;
     md5_to_hex(calculated_md5, calculated_hex);
     md5_to_hex(expected_md5, expected_hex);
-    printf("MD5 almacenado : %s\n", expected_hex);
-    printf("MD5 calculado  : %s\n", calculated_hex);
     if (memcmp(calculated_md5, expected_md5, MD5_DIGEST_LENGTH) != 0) {
-        printf("ERROR: la verificación MD5 FALLÓ.\n");
+        printf("ERROR MD5 %s: almacenado %s, calculado %s\n", filename, expected_hex,
+               calculated_hex);
         return 0;
     }
-    printf("MD5 verificado correctamente.\n");
+    printf("MD5 verificado %s (%s)\n", filename, calculated_hex);
     return 1;
 }

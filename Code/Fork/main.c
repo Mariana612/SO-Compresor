@@ -1,5 +1,6 @@
 #include "Compressor.h"
 #include "Decompressor.h"
+#include "../Commons/Codec.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,17 +27,20 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Error: directorio de salida inválido.\n");
             return EXIT_FAILURE;
         }
-        if (stat(argv[2], &input_status) != 0 || !S_ISDIR(input_status.st_mode)) {
-            fprintf(stderr, "Error: directorio de comprimidos inválido.\n");
+        if (stat(argv[2], &input_status) != 0 ||
+            (!S_ISDIR(input_status.st_mode) && !S_ISREG(input_status.st_mode))) {
+            fprintf(stderr, "Error: archivo o directorio de comprimidos inválido.\n");
             return EXIT_FAILURE;
         }
-        if (!decompress_directory(argv[2], argv[3]))
+        if (S_ISREG(input_status.st_mode) ? !common_decompress_file(argv[2], argv[3])
+                                          : !decompress_directory(argv[2], argv[3]))
             return EXIT_FAILURE;
         printf("\nDescompresión y verificación paralelas terminadas.\n");
         return EXIT_SUCCESS;
     }
 
-    fprintf(stderr, "Uso:\n  %s c <directorio>\n  %s d <directorio_huff> <directorio_salida>\n",
+    fprintf(stderr, "Uso:\n  %s c <directorio>\n"
+                    "  %s d <directorio_huff | archivo.huff> <directorio_salida>\n",
             argv[0], argv[0]);
     return EXIT_FAILURE;
 }

@@ -1,17 +1,18 @@
 #include "Compressor.h"
 #include "../Commons/Codec.h"
-#include <dirent.h>
+#include "../Commons/FileList.h"
 #include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #define MAX_THREADS 64
 
+/* Estado compartido por todos los hilos: la cola de trabajo (next/total) y el
+ * resultado global. Se ubica en una región mmap(MAP_SHARED) para hacer explícita
+ * la memoria compartida; el mutex serializa el acceso. */
 typedef struct {
     pthread_mutex_t mutex;
     size_t next;
@@ -30,23 +31,6 @@ static int thread_count(void)
     if (count < 1)
         count = 1;
     return count > MAX_THREADS ? MAX_THREADS : (int)count;
-}
-
-static int add_path(char (**paths)[PATH_MAX], size_t *count, size_t *capacity,
-                    const char *path)
-{
-    char (*new_paths)[PATH_MAX];
-    if (*count == *capacity) {
-        size_t new_capacity = *capacity == 0 ? 32 : *capacity * 2;
-        new_paths = realloc(*paths, new_capacity * sizeof(**paths));
-        if (new_paths == NULL)
-            return 0;
-        *paths = new_paths;
-        *capacity = new_capacity;
-    }
-    snprintf((*paths)[*count], PATH_MAX, "%s", path);
-    (*count)++;
-    return 1;
 }
 
 static void *compress_worker(void *argument)
@@ -75,50 +59,29 @@ static void *compress_worker(void *argument)
 
 int compress_directory(const char *directory)
 {
-    DIR *dir = opendir(directory);
-    struct dirent *entry;
-    char (*paths)[PATH_MAX] = NULL;
-    size_t count = 0, capacity = 0;
+    FileList files;
     SharedState *state;
     WorkerArgs arguments;
     pthread_t threads[MAX_THREADS];
     int created = 0, index, result = 0;
 
-    if (dir == NULL)
+    if (!file_list_load(directory, 0, &files))
         return 0;
-    while ((entry = readdir(dir)) != NULL) {
-        char path[PATH_MAX];
-        struct stat status;
-        size_t length;
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-            continue;
-        snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
-        if (stat(path, &status) != 0 || !S_ISREG(status.st_mode))
-            continue;
-        length = strlen(path);
-        if (length >= 4 && strcmp(path + length - 4, ".txt") == 0 &&
-            !add_path(&paths, &count, &capacity, path)) {
-            closedir(dir);
-            free(paths);
-            return 0;
-        }
-    }
-    closedir(dir);
 
     state = mmap(NULL, sizeof(*state), PROT_READ | PROT_WRITE,
                  MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (state == MAP_FAILED) {
-        free(paths);
+        file_list_free(&files);
         return 0;
     }
     pthread_mutex_init(&state->mutex, NULL);
     state->next = 0;
-    state->total = count;
+    state->total = files.count;
     state->success = 1;
     arguments.state = state;
-    arguments.paths = paths;
+    arguments.paths = files.paths;
 
-    for (index = 0; index < thread_count() && (size_t)index < count; index++) {
+    for (index = 0; index < thread_count() && (size_t)index < files.count; index++) {
         if (pthread_create(&threads[created], NULL, compress_worker, &arguments) != 0) {
             pthread_mutex_lock(&state->mutex);
             state->success = 0;
@@ -132,6 +95,6 @@ int compress_directory(const char *directory)
     result = state->success;
     pthread_mutex_destroy(&state->mutex);
     munmap(state, sizeof(*state));
-    free(paths);
+    file_list_free(&files);
     return result;
 }

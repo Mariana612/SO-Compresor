@@ -1,5 +1,6 @@
 #include "Compressor.h"
 #include "Decompressor.h"
+#include "../Commons/Codec.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,12 +23,17 @@ int main(int argc, char *argv[])
     }
 
     if (argc == 4 && strcmp(argv[1], "d") == 0) {
-        if (stat(argv[2], &status) != 0 || !S_ISDIR(status.st_mode) ||
-            stat(argv[3], &status) != 0 || !S_ISDIR(status.st_mode)) {
-            fprintf(stderr, "Error: directorio de comprimidos o de salida inválido.\n");
+        struct stat input_status;
+        int ok;
+        if (stat(argv[3], &status) != 0 || !S_ISDIR(status.st_mode) ||
+            stat(argv[2], &input_status) != 0 ||
+            (!S_ISDIR(input_status.st_mode) && !S_ISREG(input_status.st_mode))) {
+            fprintf(stderr, "Error: archivo/directorio de comprimidos o de salida inválido.\n");
             return EXIT_FAILURE;
         }
-        if (!decompress_directory(argv[2], argv[3])) {
+        ok = S_ISREG(input_status.st_mode) ? common_decompress_file(argv[2], argv[3])
+                                            : decompress_directory(argv[2], argv[3]);
+        if (!ok) {
             fprintf(stderr, "\nLa descompresión NO fue verificada correctamente.\n");
             return EXIT_FAILURE;
         }
@@ -35,7 +41,8 @@ int main(int argc, char *argv[])
         return EXIT_SUCCESS;
     }
 
-    fprintf(stderr, "Uso:\n  %s c <directorio>\n  %s d <directorio_huff> <directorio_salida>\n",
+    fprintf(stderr, "Uso:\n  %s c <directorio>\n"
+                    "  %s d <directorio_huff | archivo.huff> <directorio_salida>\n",
             argv[0], argv[0]);
     return EXIT_FAILURE;
 }
