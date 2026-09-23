@@ -1,10 +1,13 @@
 #include <gtk/gtk.h>
 #include "interfaz.h"
+#include "../Code/Compressor.h"
+#include "../Code/Decompressor.h"
 
 // Estructura para los datos de compresión
 typedef struct {
     // Nombres
     GtkWidget *directory_label;
+    char *selected_path;
     GtkWidget *progress_bar;
     GtkWidget *status_label;
     // Tiempos de duración
@@ -33,6 +36,9 @@ typedef struct {
 typedef struct {
     // Nombres
     GtkWidget *directory_label;
+    char *selected_path;
+    GtkWidget *output_directory_label;
+    char *output_directory_path;
     GtkWidget *progress_bar;
     GtkWidget *status_label;
     // Tiempos de duración
@@ -92,6 +98,8 @@ static void compression_folder_selected(GObject *source_object, GAsyncResult *re
     if (folder != NULL) {
         char *path = g_file_get_path(folder);
 
+        g_free(page->selected_path);
+        page->selected_path = g_strdup(path);
         gtk_label_set_text(GTK_LABEL(page->directory_label), path);
 
         g_free(path);
@@ -117,23 +125,25 @@ static void on_compression_search_clicked(GtkButton *button, gpointer user_data)
     g_object_unref(dialog);
 }
 
-// Escoger Directorio para Descompresión
-static void decompression_folder_selected(GObject *source_object, GAsyncResult *result,
+// Escoger archivo comprimido para descompresión
+static void decompression_file_selected(GObject *source_object, GAsyncResult *result,
     gpointer user_data) {
     GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
     DecompressionPage *page = user_data;
 
     GError *error = NULL;
 
-    GFile *folder = gtk_file_dialog_select_folder_finish(dialog, result, &error);
+    GFile *file = gtk_file_dialog_open_finish(dialog, result, &error);
 
-    if (folder != NULL) {
-        char *path = g_file_get_path(folder);
+    if (file != NULL) {
+        char *path = g_file_get_path(file);
 
+        g_free(page->selected_path);
+        page->selected_path = g_strdup(path);
         gtk_label_set_text(GTK_LABEL(page->directory_label), path);
 
         g_free(path);
-        g_object_unref(folder);
+        g_object_unref(file);
     }
 
     if (error != NULL) {
@@ -141,90 +151,125 @@ static void decompression_folder_selected(GObject *source_object, GAsyncResult *
     }
 }
 
-// Presionar botón de búsqueda de directorio para descompresión
+// Presionar botón de búsqueda de archivo para descompresión
 static void on_decompression_search_clicked(GtkButton *button, gpointer user_data) {
     DecompressionPage *page = user_data;
     GtkFileDialog *dialog = gtk_file_dialog_new();
 
-    gtk_file_dialog_set_title(dialog, "Seleccione el directorio a descomprimir");
+    gtk_file_dialog_set_title(dialog, "Seleccione el archivo .huff");
 
     GtkRoot *root = gtk_widget_get_root(GTK_WIDGET(button));
 
+    gtk_file_dialog_open(dialog, GTK_WINDOW(root), NULL, decompression_file_selected, page);
+    g_object_unref(dialog);
+}
+
+// Escoger directorio de destino para descompresión
+static void decompression_output_folder_selected(GObject *source_object,
+    GAsyncResult *result, gpointer user_data) {
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source_object);
+    DecompressionPage *page = user_data;
+    GError *error = NULL;
+    GFile *folder = gtk_file_dialog_select_folder_finish(dialog, result, &error);
+
+    if (folder != NULL) {
+        char *path = g_file_get_path(folder);
+
+        g_free(page->output_directory_path);
+        page->output_directory_path = g_strdup(path);
+        gtk_label_set_text(GTK_LABEL(page->output_directory_label), path);
+
+        g_free(path);
+        g_object_unref(folder);
+    }
+
+    if (error != NULL)
+        g_error_free(error);
+}
+
+// Presionar botón de búsqueda del directorio de destino
+static void on_decompression_output_search_clicked(GtkButton *button,
+    gpointer user_data) {
+    DecompressionPage *page = user_data;
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    GtkRoot *root = gtk_widget_get_root(GTK_WIDGET(button));
+
+    gtk_file_dialog_set_title(dialog, "Seleccione el directorio de destino");
     gtk_file_dialog_select_folder(dialog, GTK_WINDOW(root), NULL,
-        decompression_folder_selected, page);
+        decompression_output_folder_selected, page);
     g_object_unref(dialog);
 }
 
 // Botón de compresión se presiona
 static void on_compress_clicked(GtkButton *button, gpointer user_data) {
     CompressionPage *page = user_data;
+    (void)button;
 
-    // Resultados falsos por ahora
+    if (page->selected_path == NULL) {
+        gtk_label_set_text(GTK_LABEL(page->status_label),
+            "Seleccione un directorio antes de comprimir.");
+        return;
+    }
 
-    gtk_label_set_text(GTK_LABEL(page->status_label), "Versión actual: Serial");
+    gtk_label_set_text(GTK_LABEL(page->status_label), "Comprimiendo con la versión serial...");
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 0.0);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "En progreso");
 
-    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 0.33);
+    if (!compress_directory(page->selected_path)) {
+        gtk_label_set_text(GTK_LABEL(page->status_label), "Error durante la compresión serial.");
+        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "Error");
+        return;
+    }
 
-    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "33%");
-
-    gtk_label_set_text(GTK_LABEL(page->serial_time), "4.52 s");
-
-    gtk_label_set_text(GTK_LABEL(page->process_time), "2.41 s");
-
-    gtk_label_set_text(GTK_LABEL(page->thread_time), "1.97 s");
-
+    gtk_label_set_text(GTK_LABEL(page->status_label), "Compresión serial terminada.");
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 1.0);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "100%");
+    gtk_label_set_text(GTK_LABEL(page->serial_time), "Completado");
+    gtk_label_set_text(GTK_LABEL(page->process_time), "Pendiente");
+    gtk_label_set_text(GTK_LABEL(page->thread_time), "Pendiente");
     gtk_label_set_text(GTK_LABEL(page->serial_speedup), "--");
-
-    gtk_label_set_text(GTK_LABEL(page->process_speedup), "46.7%");
-
-    gtk_label_set_text(GTK_LABEL(page->thread_speedup), "56.4%");
-
-    gtk_label_set_text(GTK_LABEL(page->serial_original_size), "85 MB");
-
-    gtk_label_set_text(GTK_LABEL(page->process_original_size),"85 MB");
-
-    gtk_label_set_text(GTK_LABEL(page->thread_original_size), "85 MB");
-
-    gtk_label_set_text(GTK_LABEL(page->serial_compressed_size),"40 MB");
-
-    gtk_label_set_text(GTK_LABEL(page->process_compressed_size), "40 MB");
-
-    gtk_label_set_text(GTK_LABEL(page->thread_compressed_size), "40 MB");
-
-    gtk_label_set_text(GTK_LABEL(page->serial_ratio), "47.1%");
-
-    gtk_label_set_text(GTK_LABEL(page->process_ratio), "47.1%");
-
-    gtk_label_set_text(GTK_LABEL(page->thread_ratio), "47.1%");
+    gtk_label_set_text(GTK_LABEL(page->process_speedup), "--");
+    gtk_label_set_text(GTK_LABEL(page->thread_speedup), "--");
 }
 
 // Botón de descompresión se presiona
 static void on_decompress_clicked(GtkButton *button, gpointer user_data) {
     DecompressionPage *page = user_data;
+    (void)button;
 
-    gtk_label_set_text( GTK_LABEL(page->status_label), "Versión actual: Serial");
+    if (page->selected_path == NULL) {
+        gtk_label_set_text(GTK_LABEL(page->status_label),
+            "Seleccione un archivo .huff antes de descomprimir.");
+        return;
+    }
 
-    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 0.33);
+    if (page->output_directory_path == NULL) {
+        gtk_label_set_text(GTK_LABEL(page->status_label),
+            "Seleccione un directorio de destino antes de descomprimir.");
+        return;
+    }
 
-    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "33%");
+    gtk_label_set_text(GTK_LABEL(page->status_label),
+        "Descomprimiendo con la versión serial...");
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 0.0);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "En progreso");
 
-    gtk_label_set_text(GTK_LABEL(page->serial_time), "3.80 s");
+    if (!decompress_file(page->selected_path, page->output_directory_path)) {
+        gtk_label_set_text(GTK_LABEL(page->status_label),
+            "Error durante la descompresión serial.");
+        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "Error");
+        return;
+    }
 
-    gtk_label_set_text(GTK_LABEL(page->process_time), "2.10 s");
-
-    gtk_label_set_text(GTK_LABEL(page->thread_time), "1.62 s");
-
-    gtk_label_set_text(GTK_LABEL(page->serial_speedup), "--");
-
-    gtk_label_set_text(GTK_LABEL(page->process_speedup), "44.7%");
-
-    gtk_label_set_text(GTK_LABEL(page->thread_speedup), "57.4%");
-
-    gtk_label_set_text(GTK_LABEL(page->health_serial), "100%");
-
-    gtk_label_set_text(GTK_LABEL(page->health_process), "100%");
-
-    gtk_label_set_text(GTK_LABEL(page->health_thread), "100%");
+    gtk_label_set_text(GTK_LABEL(page->status_label), "Descompresión serial terminada.");
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 1.0);
+    gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "100%");
+    gtk_label_set_text(GTK_LABEL(page->serial_time), "Completado");
+    gtk_label_set_text(GTK_LABEL(page->process_time), "Pendiente");
+    gtk_label_set_text(GTK_LABEL(page->thread_time), "Pendiente");
+    gtk_label_set_text(GTK_LABEL(page->health_serial), "Correcto");
+    gtk_label_set_text(GTK_LABEL(page->health_process), "Pendiente");
+    gtk_label_set_text(GTK_LABEL(page->health_thread), "Pendiente");
 }
 
 // - - - - - TABLAS - - - - -
@@ -406,20 +451,34 @@ static GtkWidget *create_decompression_page(DecompressionPage *page) {
     gtk_widget_set_margin_start(box, 25);
     gtk_widget_set_margin_end(box, 25);
 
-    // Parte del directorio
-    gtk_box_append(GTK_BOX(box), create_title("Escoger Directorio"));
+    // Parte del archivo comprimido
+    gtk_box_append(GTK_BOX(box), create_title("Escoger archivo comprimido"));
     GtkWidget *directory_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    page->directory_label = gtk_label_new("Ningún directorio seleccionado");
+    page->directory_label = gtk_label_new("Ningún archivo seleccionado");
     gtk_widget_set_hexpand(page->directory_label, TRUE);
 
     gtk_widget_set_halign(page->directory_label, GTK_ALIGN_START);
 
-    GtkWidget *search_button = gtk_button_new_with_label("Buscar");
+    GtkWidget *search_button = gtk_button_new_with_label("Buscar archivo");
     g_signal_connect(search_button, "clicked", G_CALLBACK(on_decompression_search_clicked),
         page);
     gtk_box_append(GTK_BOX(directory_row), page->directory_label);
     gtk_box_append(GTK_BOX(directory_row), search_button);
     gtk_box_append(GTK_BOX(box), directory_row);
+
+    // Parte del directorio de destino
+    gtk_box_append(GTK_BOX(box), create_title("Escoger directorio de destino"));
+    GtkWidget *output_directory_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    page->output_directory_label = gtk_label_new("Ningún directorio seleccionado");
+    gtk_widget_set_hexpand(page->output_directory_label, TRUE);
+    gtk_widget_set_halign(page->output_directory_label, GTK_ALIGN_START);
+
+    GtkWidget *output_directory_button = gtk_button_new_with_label("Buscar directorio");
+    g_signal_connect(output_directory_button, "clicked",
+        G_CALLBACK(on_decompression_output_search_clicked), page);
+    gtk_box_append(GTK_BOX(output_directory_row), page->output_directory_label);
+    gtk_box_append(GTK_BOX(output_directory_row), output_directory_button);
+    gtk_box_append(GTK_BOX(box), output_directory_row);
 
     // El botón de inicio de descompresión
     GtkWidget *decompress_button = gtk_button_new_with_label("Iniciar descompresión");
@@ -497,6 +556,7 @@ static GtkWidget *create_statistics_page(void) {
 // La ventana inicial
 void create_main_window(GtkApplication *app, gpointer user_data) {
     AppWidgets *widgets = g_new0(AppWidgets, 1);
+    (void)user_data;
 
     GtkWidget *window = gtk_application_window_new(app);
 
