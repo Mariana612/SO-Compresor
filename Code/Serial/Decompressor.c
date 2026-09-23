@@ -3,10 +3,12 @@
 #include "HuffmanTree.h"
 #include "MD5Utils.h"
 
+#include <dirent.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define MAGIC "HUF2"
 
@@ -167,4 +169,33 @@ int decompress_file(const char *compressed_filename, const char *output_director
     }
     printf("Archivo descomprimido: %s\n", output_filename);
     return 1;
+}
+
+int decompress_directory(const char *directory, const char *output_directory)
+{
+    DIR *dir = opendir(directory);
+    struct dirent *entry;
+    int success = 1;
+
+    if (dir == NULL) {
+        perror(directory);
+        return 0;
+    }
+    while ((entry = readdir(dir)) != NULL) {
+        char path[PATH_MAX];
+        struct stat status;
+        size_t length;
+
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+        if (stat(path, &status) != 0 || !S_ISREG(status.st_mode))
+            continue;
+        length = strlen(path);
+        if (length >= 5 && strcmp(path + length - 5, ".huff") == 0 &&
+            !decompress_file(path, output_directory))
+            success = 0;
+    }
+    closedir(dir);
+    return success;
 }

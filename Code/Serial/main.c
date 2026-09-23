@@ -22,12 +22,12 @@ int main(int argc, char *argv[])
     }
 
     if (argc == 4 && strcmp(argv[1], "d") == 0) {
-        if (stat(argv[2], &status) != 0 || !S_ISREG(status.st_mode) ||
+        if (stat(argv[2], &status) != 0 || !S_ISDIR(status.st_mode) ||
             stat(argv[3], &status) != 0 || !S_ISDIR(status.st_mode)) {
-            fprintf(stderr, "Error: archivo comprimido o directorio inválido.\n");
+            fprintf(stderr, "Error: directorio de comprimidos o de salida inválido.\n");
             return EXIT_FAILURE;
         }
-        if (!decompress_file(argv[2], argv[3])) {
+        if (!decompress_directory(argv[2], argv[3])) {
             fprintf(stderr, "\nLa descompresión NO fue verificada correctamente.\n");
             return EXIT_FAILURE;
         }
@@ -35,7 +35,7 @@ int main(int argc, char *argv[])
         return EXIT_SUCCESS;
     }
 
-    fprintf(stderr, "Uso:\n  %s c <directorio>\n  %s d <archivo.huff> <directorio_salida>\n",
+    fprintf(stderr, "Uso:\n  %s c <directorio>\n  %s d <directorio_huff> <directorio_salida>\n",
             argv[0], argv[0]);
     return EXIT_FAILURE;
 }

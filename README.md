@@ -57,7 +57,50 @@ programa los procesa uno por uno. Ignora subdirectorios, enlaces simbólicos y
 archivos que no terminen en `.txt`. El archivo de salida debe estar fuera del
 directorio de entrada.
 
-Esta versión implementa compresión y almacenamiento de MD5; todavía no incluye
-un comando de descompresión.
+La implementación serial también permite descomprimir todos los archivos
+`.huff` de un directorio y verifica el MD5 de cada resultado:
+
+```bash
+./huffman-serial d <directorio_huff> <directorio_salida>
+```
+
+## Variante paralela con fork
+
+La implementación paralela está en `Code/Fork`. El padre crea hijos para
+procesar archivos independientes y recibe el resultado de cada hijo mediante
+una pipe. La cantidad máxima de hijos se ajusta al número de procesadores
+disponibles, con un límite de 64.
+
+```bash
+gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
+	-I Code/Fork -o huffman-fork Code/Fork/main.c Code/Fork/Compressor.c \
+	Code/Fork/Decompressor.c Code/Fork/HuffmanTree.c Code/Fork/MD5Utils.c \
+	-lcrypto
+./huffman-fork c Eliminar/gutenberg_txt
+mkdir -p Eliminar/gutenberg_txt_descomprimido
+./huffman-fork d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_descomprimido
+```
+
+En esta variante, `d` recibe un directorio de archivos `.huff`; los archivos se
+descomprimen en paralelo y se verifica el MD5 de cada resultado.
+
+## Variante concurrente con pthread
+
+La implementación con hilos está en `Code/Pthread`. Usa una región de memoria
+compartida creada con `mmap` para mantener la cola de trabajos y el estado
+global, protegidos por un mutex de `pthread`.
+
+```bash
+gcc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic \
+	-I Code/Pthread -o huffman-pthread Code/Pthread/main.c \
+	Code/Pthread/Compressor.c Code/Pthread/Decompressor.c \
+	Code/Pthread/HuffmanTree.c Code/Pthread/MD5Utils.c -lcrypto -pthread
+./huffman-pthread c Eliminar/gutenberg_txt
+mkdir -p Eliminar/gutenberg_txt_pthread
+./huffman-pthread d Eliminar/gutenberg_txt Eliminar/gutenberg_txt_pthread
+```
+
+La compresión y la descompresión procesan todos los archivos compatibles del
+directorio usando los hilos disponibles, con un máximo de 64 trabajadores.
 
 #
