@@ -42,8 +42,28 @@ Las tres variantes aceptan los mismos argumentos y generan exactamente el mismo
 ```
 
 Si no se indica el nombre del `.huff`, se usa `<directorio>.huff` al lado del
-directorio. El directorio de salida se crea si no existe. Al terminar se imprime
-el tiempo total, para comparar las variantes.
+directorio. El directorio de salida se crea si no existe.
+
+## Estadísticas
+
+Lo único que el programa escribe en `stdout` es una línea `clave=valor` con las
+estadísticas de la corrida, pensada para que la lea la interfaz (los errores van
+a `stderr`):
+
+```
+variante=fork operacion=c archivos=100 original=82287268 comprimido=48232800 tiempo=0.311995
+variante=fork operacion=d archivos=100 verificados=100 salud=100.00 original=82287268 comprimido=48232800 tiempo=0.619989
+```
+
+- `salud`: firmas MD5 verificadas / cantidad de archivos, en % (solo al descomprimir).
+  Si alguna firma no coincide la descompresión sigue con los demás archivos, la
+  salud baja y el programa termina con código 1.
+- `tiempo`: segundos totales de la corrida.
+- `original` / `comprimido`: bytes originales y tamaño del `.huff`.
+
+La aceleración respecto a la serial necesita los tiempos de dos corridas, así que
+se calcula con `stats_speedup_percent(tiempo_serial, tiempo)` de
+`Code/Commons/Stats.h`: `(Ts / T - 1) x 100` (el doble de rápido = 100 %).
 
 ```bash
 ./huffman-serial c Eliminar/gutenberg_txt           # crea Eliminar/gutenberg_txt.huff
@@ -80,6 +100,7 @@ y verifica su MD5.
 - `FileList`: listado de los archivos de un directorio.
 - `Codec`: formato HUF3 y compresión/descompresión de cada archivo.
 - `Cli`: argumentos y medición de tiempo.
+- `Stats`: salud, aceleración e impresión de las estadísticas.
 
 Las carpetas `Serial`, `Fork` y `Pthread` solo contienen su forma de repartir
 el trabajo.
@@ -100,7 +121,8 @@ La comunicación entre procesos (IPC) se hace con una **pipe por hijo**:
   completa de su archivo (MD5, frecuencias y tamaños). Con eso el padre arma la
   tabla del `.huff`.
 - En la codificación y en la descompresión, el hijo manda por la pipe si su
-  archivo se procesó y verificó correctamente.
+  archivo se procesó y verificó correctamente; el padre cuenta las firmas
+  verificadas para la salud.
 
 ## Variante concurrente con pthread
 

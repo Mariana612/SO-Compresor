@@ -175,14 +175,14 @@ static int wait_for_child(Child children[], int *active, void *results, size_t r
 // ============================================================
 
 // Correr pool - Reparte los índices entre varios procesos hijos
-int process_pool_run(size_t count, ProcessTask task, void *context,
-                     void *results, size_t result_size)
+size_t process_pool_run(size_t count, ProcessTask task, void *context,
+                        void *results, size_t result_size)
 {
     Child children[MAX_CHILDREN];
     int active = 0;          // Hijos trabajando en este momento
-    int success = 1;
     int limit = get_children_limit();
     size_t next = 0;         // Siguiente índice que hay que repartir
+    size_t succeeded = 0;    // Hijos que avisaron por la pipe que les fue bien
 
     // El hijo escribe todo antes de que el padre lea: tiene que caber en la pipe
     if (sizeof(int) + result_size > PIPE_BUF) {
@@ -200,17 +200,16 @@ int process_pool_run(size_t count, ProcessTask task, void *context,
                 continue;
             }
             // No se pudo crear el hijo: si no hay nadie trabajando, se aborta
+            // (los elementos sin repartir cuentan como fallidos)
             fprintf(stderr, "Error: no se pudo crear un proceso hijo\n");
-            if (active == 0) {
-                success = 0;
+            if (active == 0)
                 break;
-            }
         }
 
         // No hay lugar para más hijos: se espera a que alguno termine
-        if (!wait_for_child(children, &active, results, result_size))
-            success = 0;
+        if (wait_for_child(children, &active, results, result_size))
+            succeeded++;
     }
 
-    return success;
+    return succeeded;
 }

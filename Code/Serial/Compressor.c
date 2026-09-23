@@ -4,7 +4,7 @@
 
 #include <stdlib.h>
 
-int compress_directory(const char *directory, const char *archive)
+int compress_directory(const char *directory, const char *archive, RunStats *stats)
 {
     FileList files;
     ArchiveEntry *entries;
@@ -26,6 +26,8 @@ int compress_directory(const char *directory, const char *archive)
 
     // Tabla de metadatos al inicio del .huff
     if (success) {
+        stats->files = files.count;
+        stats->original_bytes = codec_total_size(entries, files.count);
         codec_assign_offsets(entries, files.count);
         success = codec_write_header(archive, entries, files.count);
     }

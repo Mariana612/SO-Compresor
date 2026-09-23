@@ -42,7 +42,7 @@ static int encode_task(size_t index, void *context, void *result)
 // ============================================================
 
 // Comprimir directorio - Reparte los archivos entre varios procesos hijos
-int compress_directory(const char *directory, const char *archive)
+int compress_directory(const char *directory, const char *archive, RunStats *stats)
 {
     FileList files;
     CompressJob job;
@@ -61,17 +61,19 @@ int compress_directory(const char *directory, const char *archive)
 
     // Fase 1 en paralelo: los metadatos llegan al padre por las pipes
     success = process_pool_run(files.count, analyze_task, &job, job.entries,
-                               sizeof(ArchiveEntry));
+                               sizeof(ArchiveEntry)) == files.count;
 
     // El padre arma la tabla y la escribe al inicio del .huff
     if (success) {
+        stats->files = files.count;
+        stats->original_bytes = codec_total_size(job.entries, files.count);
         codec_assign_offsets(job.entries, files.count);
         success = codec_write_header(archive, job.entries, files.count);
     }
 
     // Fase 2 en paralelo: los hijos heredan la tabla con los offsets ya asignados
     if (success)
-        success = process_pool_run(files.count, encode_task, &job, NULL, 0);
+        success = process_pool_run(files.count, encode_task, &job, NULL, 0) == files.count;
 
     free(job.entries);
     file_list_free(&files);

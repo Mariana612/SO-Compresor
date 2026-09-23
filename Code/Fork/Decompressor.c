@@ -34,19 +34,21 @@ static int decode_task(size_t index, void *context, void *result)
 // ============================================================
 
 // Descomprimir archivo - Reparte los archivos del .huff entre varios procesos hijos
-int decompress_archive(const char *archive, const char *output_directory)
+int decompress_archive(const char *archive, const char *output_directory, RunStats *stats)
 {
     DecompressJob job;
     size_t count;
-    int success;
 
     if (!codec_read_header(archive, &job.entries, &count))
         return 0;
     job.archive = archive;
     job.output_directory = output_directory;
+    stats->files = count;
+    stats->original_bytes = codec_total_size(job.entries, count);
 
-    success = process_pool_run(count, decode_task, &job, NULL, 0);
+    // Cada hijo avisa por su pipe si verificó la firma; el padre cuenta los que sí
+    stats->verified = process_pool_run(count, decode_task, &job, NULL, 0);
 
     free(job.entries);
-    return success;
+    return 1;
 }

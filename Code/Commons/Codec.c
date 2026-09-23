@@ -305,6 +305,17 @@ void codec_assign_offsets(ArchiveEntry entries[], size_t count)
     }
 }
 
+// Tamaño total - Suma los tamaños originales de todos los archivos de la tabla
+uint64_t codec_total_size(const ArchiveEntry entries[], size_t count)
+{
+    uint64_t total = 0;
+    size_t i;
+
+    for (i = 0; i < count; i++)
+        total += entries[i].original_size;
+    return total;
+}
+
 // Escribir cabecera - Crea el .huff con el identificador y la tabla de metadatos
 int codec_write_header(const char *archive, const ArchiveEntry entries[], size_t count)
 {
@@ -369,8 +380,6 @@ int codec_encode_file(const char *path, const char *archive, const ArchiveEntry 
             return 0;
         }
     }
-
-    printf("Comprimido: %s\n", path);
     return 1;
 }
 
@@ -468,10 +477,10 @@ int codec_decode_entry(const char *archive, const ArchiveEntry *entry, const cha
             ok = 0;
 
         // Comparar el MD5
-        if (ok)
-            ok = verify_md5(output_filename, entry->md5);
-        else
+        if (!ok)
             fprintf(stderr, "Error: datos incompletos para %s\n", entry->name);
+        else if (!(ok = verify_md5(output_filename, entry->md5)))
+            fprintf(stderr, "Error: la firma MD5 de %s no coincide\n", entry->name);
 
         // Fallo
         if (!ok)
@@ -481,8 +490,5 @@ int codec_decode_entry(const char *archive, const ArchiveEntry *entry, const cha
     //  Limpiar memoria y cerrar archivos
     fclose(input);
     clean_tree(root);
-
-    if (ok)
-        printf("Archivo descomprimido: %s\n", output_filename);
     return ok;
 }

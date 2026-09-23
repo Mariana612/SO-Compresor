@@ -38,36 +38,12 @@ int calculate_md5(const char *filename, unsigned char md5_out[MD5_DIGEST_LENGTH]
     return 1;
 }
 
-// MD5 a texto - Convierte los 16 bytes en 32 caracteres hexadecimales para imprimirlos
-void md5_to_hex(const unsigned char md5[MD5_DIGEST_LENGTH], char hex[33])
-{
-    int i;
-
-    // Cada byte se escribe como 2 caracteres, ej. 255 -> "ff"
-    for (i = 0; i < MD5_DIGEST_LENGTH; i++)
-        sprintf(hex + i * 2, "%02x", md5[i]);
-}
-
-// Verificar MD5 - Calcula el MD5 del archivo y lo compara con el guardado.
-// Imprime una sola línea por archivo para que los mensajes de varios hilos o
-// procesos no se mezclen.
+// Verificar MD5 - Calcula el MD5 del archivo y lo compara con el guardado
 int verify_md5(const char *filename, const unsigned char expected_md5[MD5_DIGEST_LENGTH])
 {
     unsigned char calculated_md5[MD5_DIGEST_LENGTH];
-    char calculated_hex[33], expected_hex[33];
 
     if (!calculate_md5(filename, calculated_md5))
         return 0;
-
-    md5_to_hex(calculated_md5, calculated_hex);
-    md5_to_hex(expected_md5, expected_hex);
-
-    if (memcmp(calculated_md5, expected_md5, MD5_DIGEST_LENGTH) != 0) {
-        printf("ERROR MD5 %s: almacenado %s, calculado %s\n", filename, expected_hex,
-               calculated_hex);
-        return 0;
-    }
-
-    printf("MD5 verificado %s (%s)\n", filename, calculated_hex);
-    return 1;
+    return memcmp(calculated_md5, expected_md5, MD5_DIGEST_LENGTH) == 0;
 }

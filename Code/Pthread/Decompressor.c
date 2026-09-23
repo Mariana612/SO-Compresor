@@ -32,19 +32,21 @@ static int decode_task(size_t index, void *context)
 // ============================================================
 
 // Descomprimir archivo - Reparte los archivos del .huff entre varios hilos
-int decompress_archive(const char *archive, const char *output_directory)
+int decompress_archive(const char *archive, const char *output_directory, RunStats *stats)
 {
     DecompressJob job;
     size_t count;
-    int success;
 
     if (!codec_read_header(archive, &job.entries, &count))
         return 0;
     job.archive = archive;
     job.output_directory = output_directory;
+    stats->files = count;
+    stats->original_bytes = codec_total_size(job.entries, count);
 
-    success = thread_pool_run(count, decode_task, &job);
+    // Los hilos cuentan las firmas verificadas en la memoria compartida del pool
+    stats->verified = thread_pool_run(count, decode_task, &job);
 
     free(job.entries);
-    return success;
+    return 1;
 }

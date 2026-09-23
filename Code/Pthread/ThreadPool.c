@@ -19,7 +19,7 @@ typedef struct {
     pthread_mutex_t mutex;
     size_t next_index;    // Siguiente elemento a procesar
     size_t total;         // Cantidad de elementos
-    int success;          // Queda en 0 si algún elemento falla
+    size_t succeeded;     // Elementos que salieron bien
     ThreadTask task;
     void *context;
 } SharedData;
@@ -57,11 +57,11 @@ static int take_next(SharedData *shared, size_t *index)
     return found;
 }
 
-// Marcar error - Anota en la memoria compartida que algún elemento falló
-static void mark_error(SharedData *shared)
+// Marcar éxito - Suma en la memoria compartida un elemento que salió bien
+static void mark_success(SharedData *shared)
 {
     pthread_mutex_lock(&shared->mutex);
-    shared->success = 0;
+    shared->succeeded++;
     pthread_mutex_unlock(&shared->mutex);
 }
 
@@ -72,8 +72,8 @@ static void *worker(void *arg)
     size_t index;
 
     while (take_next(shared, &index)) {
-        if (!shared->task(index, shared->context))
-            mark_error(shared);
+        if (shared->task(index, shared->context))
+            mark_success(shared);
     }
     return NULL;
 }
@@ -104,11 +104,12 @@ void shared_memory_destroy(void *memory, size_t size)
 }
 
 // Correr pool - Reparte los índices entre varios hilos
-int thread_pool_run(size_t count, ThreadTask task, void *context)
+size_t thread_pool_run(size_t count, ThreadTask task, void *context)
 {
     SharedData *shared;
     pthread_t threads[MAX_THREADS];
-    int thread_count, created = 0, i, result;
+    int thread_count, created = 0, i;
+    size_t result;
 
     // Fila de trabajo en memoria compartida
     shared = shared_memory_create(sizeof(SharedData));
@@ -117,7 +118,7 @@ int thread_pool_run(size_t count, ThreadTask task, void *context)
     pthread_mutex_init(&shared->mutex, NULL);
     shared->next_index = 0;
     shared->total = count;
-    shared->success = 1;
+    shared->succeeded = 0;
     shared->task = task;
     shared->context = context;
 
@@ -129,7 +130,6 @@ int thread_pool_run(size_t count, ThreadTask task, void *context)
     for (i = 0; i < thread_count; i++) {
         if (pthread_create(&threads[i], NULL, worker, shared) != 0) {
             fprintf(stderr, "Error: no se pudo crear el hilo %d\n", i);
-            mark_error(shared);
             break;
         }
         created++;
@@ -139,12 +139,9 @@ int thread_pool_run(size_t count, ThreadTask task, void *context)
     for (i = 0; i < created; i++)
         pthread_join(threads[i], NULL);
 
-    // Si no se creó ningún hilo, quedaron elementos sin procesar
-    if (created == 0 && count > 0)
-        shared->success = 0;
-
-    // Guardar el resultado y liberar todo
-    result = shared->success;
+    // Guardar el resultado y liberar todo. Si no se creó ningún hilo, los
+    // elementos quedaron sin procesar y no suman como exitosos
+    result = shared->succeeded;
     pthread_mutex_destroy(&shared->mutex);
     shared_memory_destroy(shared, sizeof(SharedData));
     return result;

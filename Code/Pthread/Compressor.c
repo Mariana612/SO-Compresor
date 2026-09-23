@@ -40,7 +40,7 @@ static int encode_task(size_t index, void *context)
 // ============================================================
 
 // Comprimir directorio - Reparte los archivos entre varios hilos
-int compress_directory(const char *directory, const char *archive)
+int compress_directory(const char *directory, const char *archive, RunStats *stats)
 {
     FileList files;
     CompressJob job;
@@ -61,17 +61,19 @@ int compress_directory(const char *directory, const char *archive)
     }
 
     // Fase 1 en paralelo
-    success = thread_pool_run(files.count, analyze_task, &job);
+    success = thread_pool_run(files.count, analyze_task, &job) == files.count;
 
     // Tabla al inicio del .huff
     if (success) {
+        stats->files = files.count;
+        stats->original_bytes = codec_total_size(job.entries, files.count);
         codec_assign_offsets(job.entries, files.count);
         success = codec_write_header(archive, job.entries, files.count);
     }
 
     // Fase 2 en paralelo
     if (success)
-        success = thread_pool_run(files.count, encode_task, &job);
+        success = thread_pool_run(files.count, encode_task, &job) == files.count;
 
     shared_memory_destroy(job.entries, table_size);
     file_list_free(&files);

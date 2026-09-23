@@ -48,6 +48,17 @@ static int usage(const char *program)
 }
 
 
+// Tamaño del .huff en bytes
+static uint64_t archive_size(const char *archive)
+{
+    struct stat status;
+
+    if (stat(archive, &status) != 0)
+        return 0;
+    return (uint64_t)status.st_size;
+}
+
+
 // FUNCIONES PRINCIPALES ---------------------------------------
 
 int cli_run(int argc, char *argv[], const char *variant,
@@ -55,6 +66,7 @@ int cli_run(int argc, char *argv[], const char *variant,
 {
     struct stat status;
     char archive[PATH_MAX];
+    RunStats stats = {0};
     double start;
     int ok;
 
@@ -69,13 +81,14 @@ int cli_run(int argc, char *argv[], const char *variant,
             default_archive_name(argv[2], archive);
 
         start = now_seconds();
-        ok = compress(argv[2], archive);
+        ok = compress(argv[2], archive, &stats);
+        stats.seconds = now_seconds() - start;
         if (!ok) {
-            fprintf(stderr, "\nLa compresión (%s) falló.\n", variant);
+            fprintf(stderr, "Error: la compresión (%s) falló.\n", variant);
             return EXIT_FAILURE;
         }
-        printf("\nCompresión (%s) terminada: %s en %.3f s\n", variant, archive,
-               now_seconds() - start);
+        stats.compressed_bytes = archive_size(archive);
+        stats_print(variant, 'c', &stats);
         return EXIT_SUCCESS;
     }
 
@@ -90,15 +103,16 @@ int cli_run(int argc, char *argv[], const char *variant,
         }
 
         start = now_seconds();
-        ok = decompress(argv[2], argv[3]);
+        ok = decompress(argv[2], argv[3], &stats);
+        stats.seconds = now_seconds() - start;
         if (!ok) {
-            fprintf(stderr, "\nLa descompresión (%s) NO fue verificada correctamente.\n",
-                    variant);
+            fprintf(stderr, "Error: la descompresión (%s) falló.\n", variant);
             return EXIT_FAILURE;
         }
-        printf("\nDescompresión y verificación MD5 (%s) terminadas en %.3f s\n", variant,
-               now_seconds() - start);
-        return EXIT_SUCCESS;
+        // Se imprimen aunque falle alguna firma: la salud muestra cuántas se verificaron
+        stats.compressed_bytes = archive_size(argv[2]);
+        stats_print(variant, 'd', &stats);
+        return stats.verified == stats.files ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
     return usage(argv[0]);

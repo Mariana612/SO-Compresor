@@ -25,8 +25,9 @@ int codec_analyze_file(const char *path, ArchiveEntry *entry);
 void codec_assign_offsets(ArchiveEntry entries[], size_t count);
 int codec_write_header(const char *archive, const ArchiveEntry entries[], size_t count);
 int codec_encode_file(const char *path, const char *archive, const ArchiveEntry *entry);
+uint64_t codec_total_size(const ArchiveEntry entries[], size_t count);
 
-// Descompresión
+// Descompresión (codec_decode_entry devuelve 1 solo si la firma MD5 se verificó)
 int codec_read_header(const char *archive, ArchiveEntry **entries, size_t *count);
 int codec_decode_entry(const char *archive, const ArchiveEntry *entry, const char *output_directory);
 

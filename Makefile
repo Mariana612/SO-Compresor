@@ -3,7 +3,8 @@ CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic -I Code
 LDLIBS  = -lcrypto
 
 COMMONS = Code/Commons/Cli.c Code/Commons/Codec.c Code/Commons/HuffmanTree.c \
-          Code/Commons/MD5Utils.c Code/Commons/FileList.c
+          Code/Commons/MD5Utils.c Code/Commons/FileList.c \
+          Code/Commons/Stats.c
 HEADERS = $(wildcard Code/Commons/*.h)
 
 .PHONY: all serial fork pthread clean
