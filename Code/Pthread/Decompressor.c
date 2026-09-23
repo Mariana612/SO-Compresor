@@ -1,7 +1,6 @@
 #include "Decompressor.h"
 #include "../Commons/Codec.h"
 #include "../Commons/FileList.h"
-#include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,93 +9,139 @@
 
 #define MAX_THREADS 64
 
-/* Estado compartido por todos los hilos: la cola de trabajo (next/total) y el
- * resultado global. Se ubica en una región mmap(MAP_SHARED) para hacer explícita
- * la memoria compartida; el mutex serializa el acceso. */
+// ============================================================
+// ESTRUCTURAS DE DATOS
+// ============================================================
+
+// Datos que comparten todos los hilos. Funciona como una fila de trabajo:
+// cada hilo toma el siguiente archivo pendiente hasta que no quede ninguno.
+// Se guarda en memoria compartida creada con mmap, y el mutex evita que dos
+// hilos modifiquen estos datos al mismo tiempo.
 typedef struct {
     pthread_mutex_t mutex;
-    size_t next;
-    size_t total;
-    int success;
-} SharedState;
+    size_t next_file;     // Posición del siguiente archivo a procesar
+    size_t total_files;   // Cantidad de archivos en la lista
+    int success;          // Queda en 0 si algún archivo falla
+} SharedData;
 
+// Lo que recibe cada hilo al crearse
 typedef struct {
-    SharedState *state;
+    SharedData *shared;
     char **paths;
-    const char *output_directory;
-} WorkerArgs;
+    const char *output_directory;   // Carpeta donde se descomprime
+} ThreadArgs;
 
-static int thread_count(void)
+
+// ============================================================
+// FUNCIONES AUXILIARES
+// ============================================================
+
+// Cantidad de hilos - Un hilo por núcleo del procesador (máximo MAX_THREADS)
+static int get_thread_count(void)
 {
-    long count = sysconf(_SC_NPROCESSORS_ONLN);
-    if (count < 1)
-        count = 1;
-    return count > MAX_THREADS ? MAX_THREADS : (int)count;
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+
+    if (cores < 1)
+        cores = 1;
+    if (cores > MAX_THREADS)
+        cores = MAX_THREADS;
+    return (int)cores;
 }
 
-static void *decompress_worker(void *argument)
+// Tomar archivo - Saca el siguiente archivo de la fila. Devuelve 0 si ya no quedan
+static int take_next_file(SharedData *shared, size_t *index)
 {
-    WorkerArgs *worker = argument;
-    while (1) {
-        size_t index;
-        int ok;
-        pthread_mutex_lock(&worker->state->mutex);
-        if (worker->state->next >= worker->state->total) {
-            pthread_mutex_unlock(&worker->state->mutex);
-            break;
-        }
-        index = worker->state->next++;
-        pthread_mutex_unlock(&worker->state->mutex);
+    int found = 0;
 
-        ok = common_decompress_file(worker->paths[index], worker->output_directory);
-        if (!ok) {
-            pthread_mutex_lock(&worker->state->mutex);
-            worker->state->success = 0;
-            pthread_mutex_unlock(&worker->state->mutex);
-        }
+    pthread_mutex_lock(&shared->mutex);
+    if (shared->next_file < shared->total_files) {
+        *index = shared->next_file;
+        shared->next_file++;
+        found = 1;
+    }
+    pthread_mutex_unlock(&shared->mutex);
+
+    return found;
+}
+
+// Marcar error - Anota en la memoria compartida que algún archivo falló
+static void mark_error(SharedData *shared)
+{
+    pthread_mutex_lock(&shared->mutex);
+    shared->success = 0;
+    pthread_mutex_unlock(&shared->mutex);
+}
+
+
+// ============================================================
+// FUNCIONES PRINCIPALES
+// ============================================================
+
+// Trabajo del hilo - Cada hilo descomprime archivos hasta que la fila se vacía
+static void *decompress_worker(void *arg)
+{
+    ThreadArgs *args = (ThreadArgs *)arg;
+    size_t index;
+
+    while (take_next_file(args->shared, &index)) {
+        if (!common_decompress_file(args->paths[index], args->output_directory))
+            mark_error(args->shared);
     }
     return NULL;
 }
 
+// Descomprimir directorio - Reparte los archivos entre varios hilos
 int decompress_directory(const char *directory, const char *output_directory)
 {
     FileList files;
-    SharedState *state;
-    WorkerArgs arguments;
+    SharedData *shared;
+    ThreadArgs args;
     pthread_t threads[MAX_THREADS];
-    int created = 0, index, result = 0;
+    int thread_count, created = 0, i, result;
 
+    // 1. Buscar los archivos del directorio
     if (!file_list_load(directory, 1, &files))
         return 0;
 
-    state = mmap(NULL, sizeof(*state), PROT_READ | PROT_WRITE,
-                 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (state == MAP_FAILED) {
+    // 2. Crear la memoria compartida e inicializar la fila de trabajo
+    shared = mmap(NULL, sizeof(SharedData), PROT_READ | PROT_WRITE,
+                  MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (shared == MAP_FAILED) {
+        fprintf(stderr, "Error: no se pudo crear la memoria compartida\n");
         file_list_free(&files);
         return 0;
     }
-    pthread_mutex_init(&state->mutex, NULL);
-    state->next = 0;
-    state->total = files.count;
-    state->success = 1;
-    arguments.state = state;
-    arguments.paths = files.paths;
-    arguments.output_directory = output_directory;
+    pthread_mutex_init(&shared->mutex, NULL);
+    shared->next_file = 0;
+    shared->total_files = files.count;
+    shared->success = 1;
 
-    for (index = 0; index < thread_count() && (size_t)index < files.count; index++) {
-        if (pthread_create(&threads[created], NULL, decompress_worker, &arguments) != 0) {
-            pthread_mutex_lock(&state->mutex);
-            state->success = 0;
-            pthread_mutex_unlock(&state->mutex);
+    args.shared = shared;
+    args.paths = files.paths;
+    args.output_directory = output_directory;
+
+    // 3. Crear los hilos (no más hilos que archivos)
+    thread_count = get_thread_count();
+    if ((size_t)thread_count > files.count)
+        thread_count = (int)files.count;
+
+    for (i = 0; i < thread_count; i++) {
+        if (pthread_create(&threads[i], NULL, decompress_worker, &args) != 0) {
+            fprintf(stderr, "Error: no se pudo crear el hilo %d\n", i);
+            mark_error(shared);
             break;
         }
         created++;
     }
-    for (index = 0; index < created; index++)
-        pthread_join(threads[index], NULL);
-    result = state->success;
-    pthread_mutex_destroy(&state->mutex);
-    munmap(state, sizeof(*state));
+
+    // 4. Esperar a que todos los hilos terminen
+    for (i = 0; i < created; i++)
+        pthread_join(threads[i], NULL);
+
+    // 5. Guardar el resultado y liberar todo
+    result = shared->success;
+    pthread_mutex_destroy(&shared->mutex);
+    munmap(shared, sizeof(SharedData));
     file_list_free(&files);
     return result;
 }

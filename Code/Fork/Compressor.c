@@ -1,101 +1,149 @@
 #include "Compressor.h"
 #include "../Commons/Codec.h"
 #include "../Commons/FileList.h"
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MAX_WORKERS 64
+#define MAX_CHILDREN 64
 
-typedef struct {
-    int ok;
-} WorkerResult;
+// ============================================================
+// ESTRUCTURAS DE DATOS
+// ============================================================
 
+// hijo
 typedef struct {
     pid_t pid;
-    int fd;
-} Worker;
+    int pipe_read;
+} Child;
 
-static int worker_count(void)
+
+// ============================================================
+// FUNCIONES AUXILIARES
+// ============================================================
+
+// Cantidad de hijos - Un hijo por núcleo del procesador
+static int get_children_limit(void)
 {
-    long count = sysconf(_SC_NPROCESSORS_ONLN);
-    if (count < 1)
-        count = 1;
-    return count > MAX_WORKERS ? MAX_WORKERS : (int)count;
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+
+    if (cores < 1)
+        cores = 1;
+    if (cores > MAX_CHILDREN)
+        cores = MAX_CHILDREN;
+    return (int)cores;
 }
 
-/* Espera al primer hijo que termine (no necesariamente el más antiguo), lee su
- * resultado de la pipe y libera su espacio. */
-static int collect_worker(Worker workers[], int *active)
+// Crear hijo - Crea un proceso que comprime un archivo y avisa el resultado
+
+static int start_child(Child children[], int *active, const char *path)
 {
-    WorkerResult result;
-    ssize_t received;
-    int status = 0, slot = 0;
+    int fds[2];   
+    pid_t pid;
+    int ok, i;
+
+    if (pipe(fds) != 0)
+        return 0;
+
+
+    fflush(stdout);
+    pid = fork();
+
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        return 0;
+    }
+
+    if (pid == 0) {
+        // --- Código del HIJO - cierra la lectura de su pipe y las de sus hermanos
+        close(fds[0]);
+        for (i = 0; i < *active; i++)
+            close(children[i].pipe_read);
+
+        ok = common_compress_file(path);
+        fflush(stdout);
+
+        // Le manda el resultado (1 = bien, 0 = error) al padre y termina
+        if (write(fds[1], &ok, sizeof(int)) != sizeof(int))
+            ok = 0;
+        close(fds[1]);
+        _exit(ok ? EXIT_SUCCESS : EXIT_FAILURE);
+    }
+
+    // --- Código PADRE - cierra la escritura y guarda al hijo en la lista
+    close(fds[1]); 
+    children[*active].pid = pid;
+    children[*active].pipe_read = fds[0];
+    (*active)++;
+    return 1;
+}
+
+// Esperar hijo 
+static int wait_for_child(Child children[], int *active)
+{
+    int ok = 0, slot = 0, i;
     pid_t pid;
 
-    do
-        pid = waitpid(-1, &status, 0);
-    while (pid < 0 && errno == EINTR);
-    if (pid < 0)
-        waitpid(workers[0].pid, &status, 0);
-    else
-        while (slot < *active - 1 && workers[slot].pid != pid)
-            slot++;
-    received = read(workers[slot].fd, &result, sizeof(result));
-    close(workers[slot].fd);
-    workers[slot] = workers[--(*active)];
-    return received == (ssize_t)sizeof(result) && result.ok &&
-           WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS;
+  
+    pid = waitpid(-1, NULL, 0); // ESPERA HIJO
+
+    for (i = 0; i < *active; i++) { // posicion de la lista
+        if (children[i].pid == pid)
+            slot = i;
+    }
+
+
+    if (read(children[slot].pipe_read, &ok, sizeof(int)) != sizeof(int)) // check
+        ok = 0;
+    close(children[slot].pipe_read);
+
+    children[slot] = children[*active - 1];
+    (*active)--;
+    return ok;
 }
 
+
+// ============================================================
+// FUNCIONES PRINCIPALES
+// ============================================================
+
+// Comprimir directorio - Reparte los archivos entre varios procesos hijos
 int compress_directory(const char *directory)
 {
     FileList files;
-    Worker workers[MAX_WORKERS];
-    size_t next = 0;
-    int active = 0, success = 1, limit = worker_count();
+    Child children[MAX_CHILDREN];
+    int active = 0;          
+    int success = 1;
+    int limit = get_children_limit();
+    size_t next = 0;         
 
     if (!file_list_load(directory, 0, &files))
         return 0;
+
+
     while (next < files.count || active > 0) {
+
+        // Si hay lugar y quedan archivos
         if (active < limit && next < files.count) {
-            int fds[2];
-            if (pipe(fds) == 0) {
-                pid_t pid;
-                fflush(stdout);
-                pid = fork();
-                if (pid == 0) {
-                    WorkerResult result;
-                    int index;
-                    close(fds[0]);
-                    for (index = 0; index < active; index++)
-                        close(workers[index].fd);
-                    result.ok = common_compress_file(files.paths[next]);
-                    fflush(stdout);
-                    (void)write(fds[1], &result, sizeof(result));
-                    close(fds[1]);
-                    _exit(result.ok ? EXIT_SUCCESS : EXIT_FAILURE);
-                }
-                close(fds[1]);
-                if (pid > 0) {
-                    workers[active].pid = pid;
-                    workers[active].fd = fds[0];
-                    active++;
-                    next++;
-                    continue;
-                }
-                close(fds[0]);
+            if (start_child(children, &active, files.paths[next])) {
+                next++;
+                continue;
             }
+            // No se pudo crear el hijo
+            fprintf(stderr, "Error: no se pudo crear un proceso hijo\n");
             if (active == 0) {
                 success = 0;
                 break;
             }
         }
-        if (!collect_worker(workers, &active))
+
+        // espera a terminar
+        if (!wait_for_child(children, &active))
             success = 0;
     }
+
     file_list_free(&files);
     return success;
 }
