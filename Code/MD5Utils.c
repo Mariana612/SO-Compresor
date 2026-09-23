@@ -5,9 +5,7 @@
 
 #define MD5_BUFFER_SIZE (1024 * 1024)
 
-int calculate_md5(
-        const char *filename,
-        unsigned char md5_out[MD5_DIGEST_LENGTH])
+int calculate_md5( const char *filename, unsigned char md5_out[MD5_DIGEST_LENGTH])
 {
     FILE *file;
     unsigned char buffer[MD5_BUFFER_SIZE];
@@ -36,6 +34,7 @@ int calculate_md5(
     return 1;
 }
 
+// Preparar para texto
 void md5_to_hex(
         const unsigned char md5[MD5_DIGEST_LENGTH],
         char hex[33])
@@ -50,9 +49,8 @@ void md5_to_hex(
     hex[32] = '\0';
 }
 
-int verify_md5(
-        const char *filename,
-        const unsigned char expected_md5[MD5_DIGEST_LENGTH])
+//Comprobar MD5
+int verify_md5( const char *filename, const unsigned char expected_md5[MD5_DIGEST_LENGTH])
 {
     unsigned char calculated_md5[MD5_DIGEST_LENGTH];
     char calculated_hex[33];

@@ -1,24 +1,4 @@
-/*
- * huffman.c
- *
- * Compresor Huffman para archivos TXT grandes.
- *
- * Características:
- *
- *  - Procesamiento por bloques.
- *  - Compatible con UTF-8 y caracteres especiales.
- *  - Huffman sobre los 256 posibles valores de byte.
- *  - MD5 del archivo original.
- *  - MD5 almacenado dentro del archivo .huff.
- *
- * Compilación:
- *
- *     gcc -Wall -Wextra -O2 huffman.c -o huffman -lcrypto
- *
- * Uso:
- *
- *     ./huffman libros/
- */
+
 
 #include <stdio.h> // Bien
 #include <stdlib.h> // Bien
@@ -80,6 +60,7 @@ static int is_leaf(HuffmanNode *node)
            node->left == NULL &&
            node->right == NULL;
 }
+
 
 
 // =============================================================

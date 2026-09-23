@@ -1,5 +1,7 @@
 #include "BitWriter.h"
 
+
+// Inicializar el escrritor de bits
 void bitwriter_init(BitWriter *writer, FILE *file)
 {
     writer->file = file;
@@ -7,17 +9,20 @@ void bitwriter_init(BitWriter *writer, FILE *file)
     writer->bits = 0;
 }
 
+// Escribir un bit en el archivo
 void write_bit(BitWriter *writer, int bit)
 {
-    writer->buffer <<= 1;
+    writer->buffer = writer->buffer * 2;
 
-    if (bit)
-        writer->buffer |= 1;
+    // Agregar el nuevo bit
+    if (bit != 0)
+        writer->buffer = writer->buffer + 1;
 
     writer->bits++;
 
     if (writer->bits == 8) {
         fputc(writer->buffer, writer->file);
+
         writer->buffer = 0;
         writer->bits = 0;
     }
