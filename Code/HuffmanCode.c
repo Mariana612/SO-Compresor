@@ -1264,6 +1264,726 @@ static void process_directory(
     closedir(dir);
 }
 
+/* ============================================================
+   LEER UINT64
+   ============================================================ */
+
+static int read_uint64(
+        FILE *file,
+        uint64_t *value)
+{
+    int i;
+    int byte;
+    uint64_t result = 0;
+
+    for (i = 0; i < 8; i++) {
+
+        byte = fgetc(file);
+
+        if (byte == EOF)
+            return 0;
+
+        result |=
+            ((uint64_t)(unsigned char)byte)
+            << (8 * i);
+    }
+
+    *value = result;
+
+    return 1;
+}
+
+
+/* ============================================================
+   BIT READER
+   ============================================================ */
+
+typedef struct {
+
+    FILE *file;
+
+    unsigned char buffer;
+
+    int bits;
+
+} BitReader;
+
+
+static void bitreader_init(
+        BitReader *reader,
+        FILE *file)
+{
+    reader->file = file;
+
+    reader->buffer = 0;
+
+    reader->bits = 0;
+}
+
+
+static int read_bit(
+        BitReader *reader)
+{
+    int bit;
+
+    if (reader->bits == 0) {
+
+        int value = fgetc(
+            reader->file
+        );
+
+        if (value == EOF)
+            return -1;
+
+        reader->buffer =
+            (unsigned char)value;
+
+        reader->bits = 8;
+    }
+
+    bit =
+        (reader->buffer >> 7) & 1;
+
+    reader->buffer <<= 1;
+
+    reader->bits--;
+
+    return bit;
+}
+
+
+/* ============================================================
+   COMPARAR MD5
+   ============================================================ */
+
+static int verify_md5(
+        const char *filename,
+        const unsigned char expected_md5[16])
+{
+    unsigned char calculated_md5[16];
+
+    char calculated_hex[33];
+
+    char expected_hex[33];
+
+
+    if (!calculate_md5(
+            filename,
+            calculated_md5)) {
+
+        return 0;
+    }
+
+
+    md5_to_hex(
+        calculated_md5,
+        calculated_hex
+    );
+
+    md5_to_hex(
+        expected_md5,
+        expected_hex
+    );
+
+
+    printf(
+        "MD5 almacenado : %s\n",
+        expected_hex
+    );
+
+    printf(
+        "MD5 calculado  : %s\n",
+        calculated_hex
+    );
+
+
+    if (memcmp(
+            calculated_md5,
+            expected_md5,
+            16
+        ) != 0) {
+
+        printf(
+            "ERROR: la verificación MD5 FALLÓ.\n"
+        );
+
+        return 0;
+    }
+
+
+    printf(
+        "MD5 verificado correctamente.\n"
+    );
+
+    return 1;
+}
+
+
+/* ============================================================
+   DESCOMPRIMIR
+   ============================================================ */
+
+static int decompress_file(
+        const char *compressed_filename,
+        const char *output_directory)
+{
+    FILE *input;
+    FILE *output;
+
+    char output_filename[PATH_MAX];
+
+    uint64_t frequencies[SYMBOLS];
+
+    uint64_t original_size;
+
+    uint64_t bytes_written = 0;
+
+    unsigned char expected_md5[MD5_DIGEST_LENGTH];
+
+    char magic[5];
+
+    HuffmanNode *root;
+
+    HuffmanNode *current;
+
+    int i;
+
+
+    /*
+     * ========================================================
+     * Abrir archivo comprimido
+     * ========================================================
+     */
+
+    input = fopen(
+        compressed_filename,
+        "rb"
+    );
+
+    if (input == NULL) {
+
+        perror(compressed_filename);
+
+        return 0;
+    }
+
+
+    /*
+     * ========================================================
+     * Leer MAGIC
+     * ========================================================
+     */
+
+    if (fread(
+            magic,
+            1,
+            4,
+            input
+        ) != 4) {
+
+        fprintf(
+            stderr,
+            "Error: archivo comprimido incompleto.\n"
+        );
+
+        fclose(input);
+
+        return 0;
+    }
+
+    magic[4] = '\0';
+
+
+    if (memcmp(
+            magic,
+            MAGIC,
+            4
+        ) != 0) {
+
+        fprintf(
+            stderr,
+            "Error: formato de archivo no válido.\n"
+        );
+
+        fclose(input);
+
+        return 0;
+    }
+
+
+    /*
+     * ========================================================
+     * Tamaño original
+     * ========================================================
+     */
+
+    if (!read_uint64(
+            input,
+            &original_size)) {
+
+        fprintf(
+            stderr,
+            "Error leyendo tamaño original.\n"
+        );
+
+        fclose(input);
+
+        return 0;
+    }
+
+
+    /*
+     * ========================================================
+     * MD5 almacenado
+     * ========================================================
+     */
+
+    if (fread(
+            expected_md5,
+            1,
+            MD5_DIGEST_LENGTH,
+            input
+        ) != MD5_DIGEST_LENGTH) {
+
+        fprintf(
+            stderr,
+            "Error leyendo MD5.\n"
+        );
+
+        fclose(input);
+
+        return 0;
+    }
+
+
+    /*
+     * ========================================================
+     * Tabla de frecuencias
+     * ========================================================
+     */
+
+    for (i = 0;
+         i < SYMBOLS;
+         i++) {
+
+        if (!read_uint64(
+                input,
+                &frequencies[i])) {
+
+            fprintf(
+                stderr,
+                "Error leyendo tabla de frecuencias.\n"
+            );
+
+            fclose(input);
+
+            return 0;
+        }
+    }
+
+
+    /*
+     * ========================================================
+     * Archivo vacío
+     * ========================================================
+     */
+
+    if (original_size == 0) {
+
+        const char *base;
+        size_t len;
+
+
+        /*
+         * Obtener nombre sin .huff.
+         */
+
+        base =
+            strrchr(
+                compressed_filename,
+                '/'
+            );
+
+        if (base == NULL)
+            base = compressed_filename;
+        else
+            base++;
+
+
+        len = strlen(base);
+
+
+        if (len <= 5 ||
+            strcmp(
+                base + len - 5,
+                ".huff"
+            ) != 0) {
+
+            fprintf(
+                stderr,
+                "Error: extensión .huff inválida.\n"
+            );
+
+            fclose(input);
+
+            return 0;
+        }
+
+
+        snprintf(
+            output_filename,
+            sizeof(output_filename),
+            "%s/%.*s",
+            output_directory,
+            (int)(len - 5),
+            base
+        );
+
+
+        output = fopen(
+            output_filename,
+            "wb"
+        );
+
+        if (output == NULL) {
+
+            perror(output_filename);
+
+            fclose(input);
+
+            return 0;
+        }
+
+
+        fclose(output);
+
+        fclose(input);
+
+
+        printf(
+            "Archivo descomprimido: %s\n",
+            output_filename
+        );
+
+
+        /*
+         * Verificar MD5 incluso para archivos vacíos.
+         */
+
+        if (!verify_md5(
+                output_filename,
+                expected_md5)) {
+
+            remove(output_filename);
+
+            return 0;
+        }
+
+
+        return 1;
+    }
+
+
+    /*
+     * ========================================================
+     * Construir árbol Huffman
+     * ========================================================
+     */
+
+    root =
+        build_tree(
+            frequencies
+        );
+
+    if (root == NULL) {
+
+        fprintf(
+            stderr,
+            "Error: no se pudo reconstruir el árbol Huffman.\n"
+        );
+
+        fclose(input);
+
+        return 0;
+    }
+
+
+    /*
+     * ========================================================
+     * Obtener nombre de salida
+     * ========================================================
+     */
+
+    {
+        const char *base;
+        size_t len;
+
+
+        base =
+            strrchr(
+                compressed_filename,
+                '/'
+            );
+
+        if (base == NULL)
+            base = compressed_filename;
+        else
+            base++;
+
+
+        len = strlen(base);
+
+
+        if (len <= 5 ||
+            strcmp(
+                base + len - 5,
+                ".huff"
+            ) != 0) {
+
+            fprintf(
+                stderr,
+                "Error: el archivo debe terminar en .huff.\n"
+            );
+
+            free_tree(root);
+
+            fclose(input);
+
+            return 0;
+        }
+
+
+        snprintf(
+            output_filename,
+            sizeof(output_filename),
+            "%s/%.*s",
+            output_directory,
+            (int)(len - 5),
+            base
+        );
+    }
+
+
+    /*
+     * ========================================================
+     * Crear archivo de salida
+     * ========================================================
+     */
+
+    output =
+        fopen(
+            output_filename,
+            "wb"
+        );
+
+    if (output == NULL) {
+
+        perror(output_filename);
+
+        free_tree(root);
+
+        fclose(input);
+
+        return 0;
+    }
+
+
+    /*
+     * ========================================================
+     * DESCOMPRESIÓN
+     * ========================================================
+     */
+
+    {
+        BitReader reader;
+
+        bitreader_init(
+            &reader,
+            input
+        );
+
+
+        current = root;
+
+
+        /*
+         * Recorrer exactamente original_size
+         * símbolos.
+         *
+         * Esto es importante porque el último byte
+         * comprimido puede contener bits de relleno.
+         */
+
+        while (bytes_written < original_size) {
+
+            int bit;
+
+
+            /*
+             * Caso especial: solamente existe
+             * un símbolo en el archivo.
+             */
+
+            if (is_leaf(root)) {
+
+                if (fputc(
+                        root->symbol,
+                        output
+                    ) == EOF) {
+
+                    fprintf(
+                        stderr,
+                        "Error escribiendo archivo.\n"
+                    );
+
+                    fclose(output);
+                    fclose(input);
+                    free_tree(root);
+
+                    remove(output_filename);
+
+                    return 0;
+                }
+
+                bytes_written++;
+
+                continue;
+            }
+
+
+            /*
+             * Leer siguiente bit.
+             */
+
+            bit =
+                read_bit(
+                    &reader
+                );
+
+
+            if (bit < 0) {
+
+                fprintf(
+                    stderr,
+                    "Error: datos comprimidos incompletos.\n"
+                );
+
+                fclose(output);
+                fclose(input);
+                free_tree(root);
+
+                remove(output_filename);
+
+                return 0;
+            }
+
+
+            if (bit == 0)
+                current = current->left;
+            else
+                current = current->right;
+
+
+            /*
+             * Verificar árbol corrupto.
+             */
+
+            if (current == NULL) {
+
+                fprintf(
+                    stderr,
+                    "Error: árbol Huffman inválido.\n"
+                );
+
+                fclose(output);
+                fclose(input);
+                free_tree(root);
+
+                remove(output_filename);
+
+                return 0;
+            }
+
+
+            /*
+             * Llegamos a una hoja.
+             */
+
+            if (is_leaf(current)) {
+
+                if (fputc(
+                        current->symbol,
+                        output
+                    ) == EOF) {
+
+                    fprintf(
+                        stderr,
+                        "Error escribiendo archivo.\n"
+                    );
+
+                    fclose(output);
+                    fclose(input);
+                    free_tree(root);
+
+                    remove(output_filename);
+
+                    return 0;
+                }
+
+
+                bytes_written++;
+
+                current = root;
+            }
+        }
+    }
+
+
+    fclose(output);
+
+    fclose(input);
+
+    free_tree(root);
+
+
+    printf(
+        "Archivo descomprimido: %s\n",
+        output_filename
+    );
+
+
+    /*
+     * ========================================================
+     * VERIFICACIÓN MD5
+     * ========================================================
+     */
+
+    if (!verify_md5(
+            output_filename,
+            expected_md5)) {
+
+        /*
+         * Si el MD5 no coincide, el archivo generado
+         * se elimina porque no podemos garantizar
+         * que la descompresión sea correcta.
+         */
+
+        remove(output_filename);
+
+        fprintf(
+            stderr,
+            "El archivo descomprimido fue eliminado "
+            "porque la verificación falló.\n"
+        );
+
+        return 0;
+    }
+
+
+    return 1;
+}
+
+
 
 /* ============================================================
    MAIN
@@ -1276,58 +1996,161 @@ int main(
     struct stat st;
 
 
-    if (argc != 2) {
+    /*
+     * ========================================================
+     * COMPRESIÓN
+     * ========================================================
+     *
+     * ./huffman c libros/
+     */
 
-        fprintf(
-            stderr,
-            "Uso: %s <directorio>\n",
-            argv[0]
+    if (argc == 3 &&
+        strcmp(argv[1], "c") == 0) {
+
+        if (stat(
+                argv[2],
+                &st
+            ) != 0) {
+
+            perror(argv[2]);
+
+            return EXIT_FAILURE;
+        }
+
+
+        if (!S_ISDIR(st.st_mode)) {
+
+            fprintf(
+                stderr,
+                "Error: %s no es un directorio.\n",
+                argv[2]
+            );
+
+            return EXIT_FAILURE;
+        }
+
+
+        process_directory(
+            argv[2]
         );
 
-        return EXIT_FAILURE;
+
+        printf(
+            "\nProceso de compresión terminado.\n"
+        );
+
+
+        return EXIT_SUCCESS;
     }
 
 
     /*
-     * Verificar directorio.
+     * ========================================================
+     * DESCOMPRESIÓN
+     * ========================================================
+     *
+     * ./huffman d archivo.huff directorio/
      */
 
-    if (stat(
-            argv[1],
-            &st
-        ) != 0) {
+    if (argc == 4 &&
+        strcmp(argv[1], "d") == 0) {
 
-        perror(argv[1]);
+        /*
+         * Verificar archivo comprimido.
+         */
 
-        return EXIT_FAILURE;
-    }
+        if (stat(
+                argv[2],
+                &st
+            ) != 0) {
+
+            perror(argv[2]);
+
+            return EXIT_FAILURE;
+        }
 
 
-    if (!S_ISDIR(st.st_mode)) {
+        if (!S_ISREG(st.st_mode)) {
 
-        fprintf(
-            stderr,
-            "Error: %s no es un directorio.\n",
-            argv[1]
+            fprintf(
+                stderr,
+                "Error: %s no es un archivo.\n",
+                argv[2]
+            );
+
+            return EXIT_FAILURE;
+        }
+
+
+        /*
+         * Verificar directorio de salida.
+         */
+
+        if (stat(
+                argv[3],
+                &st
+            ) != 0) {
+
+            perror(argv[3]);
+
+            return EXIT_FAILURE;
+        }
+
+
+        if (!S_ISDIR(st.st_mode)) {
+
+            fprintf(
+                stderr,
+                "Error: %s no es un directorio.\n",
+                argv[3]
+            );
+
+            return EXIT_FAILURE;
+        }
+
+
+        /*
+         * Descomprimir y verificar MD5.
+         */
+
+        if (!decompress_file(
+                argv[2],
+                argv[3]
+            )) {
+
+            fprintf(
+                stderr,
+                "\nLa descompresión NO fue verificada correctamente.\n"
+            );
+
+            return EXIT_FAILURE;
+        }
+
+
+        printf(
+            "\nDescompresión y verificación terminadas correctamente.\n"
         );
 
-        return EXIT_FAILURE;
+
+        return EXIT_SUCCESS;
     }
 
 
     /*
-     * Procesar libros.
+     * ========================================================
+     * USO INCORRECTO
+     * ========================================================
      */
 
-    process_directory(
-        argv[1]
+    fprintf(
+        stderr,
+        "Uso:\n"
+        "  %s c <directorio>\n"
+        "  %s d <archivo.huff> <directorio_salida>\n",
+        argv[0],
+        argv[0]
     );
 
 
-    printf(
-        "\nProceso terminado.\n"
-    );
-
-
-    return EXIT_SUCCESS;
+    return EXIT_FAILURE;
 }
