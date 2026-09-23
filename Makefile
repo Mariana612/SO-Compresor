@@ -25,8 +25,8 @@ $(BIN)/huffman-pthread: $(wildcard src/pthread/*.c src/pthread/*.h) $(COMMON) $(
 	$(CC) $(CFLAGS) -pthread -o $@ src/pthread/*.c $(COMMON) $(LDLIBS)
 
 # Interfaz gráfica (GTK 4)
-$(BIN)/interfaz: $(wildcard src/gui/*.c src/gui/*.h) | $(BIN)
-	$(CC) -O2 -Wall -Wextra -o $@ src/gui/*.c $$(pkg-config --cflags --libs gtk4)
+$(BIN)/interfaz: $(wildcard src/gui/*.c src/gui/*.h) src/common/Stats.c src/common/Stats.h | $(BIN)
+	$(CC) $(CFLAGS) -o $@ src/gui/*.c src/common/Stats.c $$(pkg-config --cflags --libs gtk4) $(LDLIBS)
 
 $(BIN):
 	mkdir -p $@

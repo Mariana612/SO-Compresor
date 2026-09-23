@@ -1,7 +1,89 @@
 #include <gtk/gtk.h>
 #include "interfaz.h"
-#include "../Code/Compressor.h"
-#include "../Code/Decompressor.h"
+#include "../common/Stats.h"
+
+#include <inttypes.h>
+#include <string.h>
+#include <sys/wait.h>
+
+typedef struct {
+    RunStats stats;
+    int exit_status;
+} BackendResult;
+
+static const char *backend_names[] = {"serial", "fork", "pthread"};
+
+// Ejecuta los programas de compresión o descompresión
+static int run_backend(const char *backend, char mode, const char *input,
+    const char *output, BackendResult *result) {
+    char executable[64];
+    char *arguments[5];
+    char *stdout_text = NULL;
+    char *stderr_text = NULL;
+    GError *error = NULL;
+    int wait_status;
+    int parsed;
+
+    snprintf(executable, sizeof(executable), "bin/huffman-%s", backend);
+    arguments[0] = executable;
+    arguments[1] = mode == 'c' ? "c" : "d";
+    arguments[2] = (char *)input;
+    arguments[3] = (char *)output;
+    arguments[4] = NULL;
+
+    memset(result, 0, sizeof(*result));
+    // esperar a que termine cada proceso
+    if (!g_spawn_sync(NULL, arguments, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL,
+        &stdout_text, &stderr_text, &wait_status, &error)) {
+        if (error != NULL)
+            g_error_free(error);
+        g_free(stdout_text);
+        g_free(stderr_text);
+        return 0;
+    }
+
+    result->exit_status = WIFEXITED(wait_status) ? WEXITSTATUS(wait_status) : -1;
+    // Se obtienen las estadisiticas
+    if (mode == 'c') {
+        parsed = sscanf(stdout_text, "variante=%*s operacion=c archivos=%zu "
+            "original=%" SCNu64 " comprimido=%" SCNu64 " tiempo=%lf",
+            &result->stats.files, &result->stats.original_bytes,
+            &result->stats.compressed_bytes, &result->stats.seconds);
+    } else {
+        parsed = sscanf(stdout_text, "variante=%*s operacion=d archivos=%zu "
+            "verificados=%zu salud=%*f original=%" SCNu64
+            " comprimido=%" SCNu64 " tiempo=%lf", &result->stats.files,
+            &result->stats.verified, &result->stats.original_bytes,
+            &result->stats.compressed_bytes, &result->stats.seconds);
+    }
+
+    g_free(stdout_text);
+    g_free(stderr_text);
+    return parsed == (mode == 'c' ? 4 : 5);
+}
+// Nombres de labels en la pagina
+static void set_result_label(GtkWidget *label, const char *format, double value) {
+    char text[64];
+    snprintf(text, sizeof(text), format, value);
+    gtk_label_set_text(GTK_LABEL(label), text);
+}
+
+static void set_size_label(GtkWidget *label, uint64_t value) {
+    char text[64];
+    snprintf(text, sizeof(text), "%" PRIu64, value);
+    gtk_label_set_text(GTK_LABEL(label), text);
+}
+
+// Volver a cargar la pagina
+static void refresh_interface(void) {
+    while (g_main_context_pending(NULL))
+        g_main_context_iteration(NULL, FALSE);
+}
+
+// Estructura para las estadisticas
+typedef struct {
+    GtkWidget *cells[8][3];
+} StatisticsPage;
 
 // Estructura para los datos de compresión
 typedef struct {
@@ -30,6 +112,8 @@ typedef struct {
     GtkWidget *serial_ratio;
     GtkWidget *process_ratio;
     GtkWidget *thread_ratio;
+
+    StatisticsPage *statistics;
 } CompressionPage;
 
 // Estructura para los datos de descompresión
@@ -53,13 +137,47 @@ typedef struct {
     GtkWidget *health_serial;
     GtkWidget *health_process;
     GtkWidget *health_thread;
+
+    StatisticsPage *statistics;
 } DecompressionPage;
 
 // Tablas de Compresión y Descompresión
 typedef struct {
     CompressionPage compression;
     DecompressionPage decompression;
+    StatisticsPage statistics;
 } AppWidgets;
+
+// Estadísticas de compresión
+static void update_compression_statistics(StatisticsPage *page,
+    const BackendResult results[3]) {
+    int index;
+
+    for (index = 0; index < 3; index++) {
+        set_result_label(page->cells[0][index], "%.6f s", results[index].stats.seconds);
+        set_result_label(page->cells[3][index], "%.2f%%", index == 0 ? 0.0 :
+            stats_speedup_percent(results[0].stats.seconds, results[index].stats.seconds));
+        set_size_label(page->cells[5][index], results[index].stats.original_bytes);
+        set_size_label(page->cells[6][index], results[index].stats.compressed_bytes);
+        set_result_label(page->cells[7][index], "%.2f%%", results[index].stats.original_bytes == 0 ?
+            0.0 : 100.0 * results[index].stats.compressed_bytes /
+            results[index].stats.original_bytes);
+    }
+}
+
+// Estadísticas de descompresión
+static void update_decompression_statistics(StatisticsPage *page,
+    const BackendResult results[3]) {
+    int index;
+
+    for (index = 0; index < 3; index++) {
+        set_result_label(page->cells[1][index], "%.6f s", results[index].stats.seconds);
+        set_result_label(page->cells[2][index], "%.2f%%",
+            stats_health_percent(&results[index].stats));
+        set_result_label(page->cells[4][index], "%.2f%%", index == 0 ? 0.0 :
+            stats_speedup_percent(results[0].stats.seconds, results[index].stats.seconds));
+    }
+}
 
 // - - - - - CREAR TITULOS - - - - -
 static GtkWidget *create_title(const char *text) {
@@ -84,6 +202,7 @@ static GtkWidget *create_subtitle(const char *text) {
 
     return label;
 }
+
 // - - - - - FUNCIONES DE LA INTERFAZ - - - - -
 // Escoger Directorio para Compresión
 static void compression_folder_selected(GObject *source_object, GAsyncResult *result,
@@ -203,6 +322,18 @@ static void on_decompression_output_search_clicked(GtkButton *button,
 // Botón de compresión se presiona
 static void on_compress_clicked(GtkButton *button, gpointer user_data) {
     CompressionPage *page = user_data;
+    // Estadisitcas
+    BackendResult results[3];
+    GtkWidget *times[3] = {page->serial_time, page->process_time, page->thread_time};
+    GtkWidget *speedups[3] = {page->serial_speedup, page->process_speedup,
+        page->thread_speedup};
+    GtkWidget *original_sizes[3] = {page->serial_original_size,
+        page->process_original_size, page->thread_original_size};
+    GtkWidget *compressed_sizes[3] = {page->serial_compressed_size,
+        page->process_compressed_size, page->thread_compressed_size};
+    GtkWidget *ratios[3] = {page->serial_ratio, page->process_ratio, page->thread_ratio};
+    char *archive;
+    int index;
     (void)button;
 
     if (page->selected_path == NULL) {
@@ -210,31 +341,63 @@ static void on_compress_clicked(GtkButton *button, gpointer user_data) {
             "Seleccione un directorio antes de comprimir.");
         return;
     }
-
-    gtk_label_set_text(GTK_LABEL(page->status_label), "Comprimiendo con la versión serial...");
+    // Se crea el nombre del archivo comprimido
+    archive = g_strdup_printf("%s.huff", page->selected_path);
+    gtk_label_set_text(GTK_LABEL(page->status_label), "Ejecutando las tres variantes...");
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 0.0);
     gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "En progreso");
+    
+    // Se ejecutan las tres variantes
+    for (index = 0; index < 3; index++) {
+        char status[128];
 
-    if (!compress_directory(page->selected_path)) {
-        gtk_label_set_text(GTK_LABEL(page->status_label), "Error durante la compresión serial.");
-        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "Error");
-        return;
+        snprintf(status, sizeof(status), "Comprimiendo con %s (%d/3)...",
+            backend_names[index], index + 1);
+        gtk_label_set_text(GTK_LABEL(page->status_label), status);
+        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), status);
+        refresh_interface();
+        if (!run_backend(backend_names[index], 'c', page->selected_path, archive,
+            &results[index]) || results[index].exit_status != 0) {
+            gtk_label_set_text(GTK_LABEL(page->status_label),
+                "Error durante la compresión.");
+            gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "Error");
+            g_free(archive);
+            return;
+        }
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar),
+            (double)(index + 1) / 3.0);
+        refresh_interface();
     }
+    // Se actualizan las estadisticas
+    for (index = 0; index < 3; index++) {
+        set_result_label(times[index], "%.6f s", results[index].stats.seconds);
+        set_result_label(speedups[index], "%.2f%%", index == 0 ? 0.0 :
+            stats_speedup_percent(results[0].stats.seconds, results[index].stats.seconds));
+        set_size_label(original_sizes[index], results[index].stats.original_bytes);
+        set_size_label(compressed_sizes[index], results[index].stats.compressed_bytes);
+        set_result_label(ratios[index], "%.2f%%", results[index].stats.original_bytes == 0 ?
+            0.0 : 100.0 * results[index].stats.compressed_bytes /
+            results[index].stats.original_bytes);
+    }
+            update_compression_statistics(page->statistics, results);
 
-    gtk_label_set_text(GTK_LABEL(page->status_label), "Compresión serial terminada.");
+    gtk_label_set_text(GTK_LABEL(page->status_label), "Compresión terminada.");
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 1.0);
     gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "100%");
-    gtk_label_set_text(GTK_LABEL(page->serial_time), "Completado");
-    gtk_label_set_text(GTK_LABEL(page->process_time), "Pendiente");
-    gtk_label_set_text(GTK_LABEL(page->thread_time), "Pendiente");
-    gtk_label_set_text(GTK_LABEL(page->serial_speedup), "--");
-    gtk_label_set_text(GTK_LABEL(page->process_speedup), "--");
-    gtk_label_set_text(GTK_LABEL(page->thread_speedup), "--");
+    g_free(archive);
 }
 
 // Botón de descompresión se presiona
 static void on_decompress_clicked(GtkButton *button, gpointer user_data) {
     DecompressionPage *page = user_data;
+    // Estadisitcas
+    BackendResult results[3];
+    GtkWidget *times[3] = {page->serial_time, page->process_time, page->thread_time};
+    GtkWidget *speedups[3] = {page->serial_speedup, page->process_speedup,
+        page->thread_speedup};
+    GtkWidget *health[3] = {page->health_serial, page->health_process,
+        page->health_thread};
+    int index;
     (void)button;
 
     if (page->selected_path == NULL) {
@@ -250,26 +413,45 @@ static void on_decompress_clicked(GtkButton *button, gpointer user_data) {
     }
 
     gtk_label_set_text(GTK_LABEL(page->status_label),
-        "Descomprimiendo con la versión serial...");
+        "Ejecutando las tres variantes...");
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 0.0);
     gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "En progreso");
 
-    if (!decompress_file(page->selected_path, page->output_directory_path)) {
-        gtk_label_set_text(GTK_LABEL(page->status_label),
-            "Error durante la descompresión serial.");
-        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "Error");
-        return;
-    }
+    // Se ejecutan las tres variantes
+    for (index = 0; index < 3; index++) {
+        char status[128];
 
-    gtk_label_set_text(GTK_LABEL(page->status_label), "Descompresión serial terminada.");
+        snprintf(status, sizeof(status), "Descomprimiendo con %s (%d/3)...",
+            backend_names[index], index + 1);
+        gtk_label_set_text(GTK_LABEL(page->status_label), status);
+        gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), status);
+        refresh_interface();
+        if (!run_backend(backend_names[index], 'd', page->selected_path,
+            page->output_directory_path, &results[index]) ||
+            (results[index].exit_status != 0 && results[index].stats.verified ==
+            results[index].stats.files)) {
+            gtk_label_set_text(GTK_LABEL(page->status_label),
+                "Error durante la descompresión.");
+            gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "Error");
+            return;
+        }
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar),
+            (double)(index + 1) / 3.0);
+        refresh_interface();
+    }
+    // Se actualizan las estadisticas
+    for (index = 0; index < 3; index++) {
+        set_result_label(times[index], "%.6f s", results[index].stats.seconds);
+        set_result_label(speedups[index], "%.2f%%", index == 0 ? 0.0 :
+            stats_speedup_percent(results[0].stats.seconds, results[index].stats.seconds));
+        set_result_label(health[index], "%.2f%%",
+            stats_health_percent(&results[index].stats));
+    }
+    update_decompression_statistics(page->statistics, results);
+
+    gtk_label_set_text(GTK_LABEL(page->status_label), "Descompresión terminada.");
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(page->progress_bar), 1.0);
     gtk_progress_bar_set_text(GTK_PROGRESS_BAR(page->progress_bar), "100%");
-    gtk_label_set_text(GTK_LABEL(page->serial_time), "Completado");
-    gtk_label_set_text(GTK_LABEL(page->process_time), "Pendiente");
-    gtk_label_set_text(GTK_LABEL(page->thread_time), "Pendiente");
-    gtk_label_set_text(GTK_LABEL(page->health_serial), "Correcto");
-    gtk_label_set_text(GTK_LABEL(page->health_process), "Pendiente");
-    gtk_label_set_text(GTK_LABEL(page->health_thread), "Pendiente");
 }
 
 // - - - - - TABLAS - - - - -
@@ -507,7 +689,7 @@ static GtkWidget *create_decompression_page(DecompressionPage *page) {
 }
 
 // Ventana de estadísticas
-static GtkWidget *create_statistics_page(void) {
+static GtkWidget *create_statistics_page(StatisticsPage *page) {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 15);
 
     gtk_widget_set_margin_top(box, 25);
@@ -542,9 +724,11 @@ static GtkWidget *create_statistics_page(void) {
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Ratio de compresión"), 0, 8, 1, 1);
 
     // Al inicio todo está vacío
-    for (int row = 1; row <= 8; row++) {
-        for (int column = 1; column <= 3; column++) {
-            gtk_grid_attach(GTK_GRID(grid), gtk_label_new("--"), column, row, 1, 1);
+    for (int row = 0; row < 8; row++) {
+        for (int column = 0; column < 3; column++) {
+            page->cells[row][column] = gtk_label_new("--");
+            gtk_grid_attach(GTK_GRID(grid), page->cells[row][column],
+                column + 1, row + 1, 1, 1);
         }
     }
 
@@ -590,6 +774,9 @@ void create_main_window(GtkApplication *app, gpointer user_data) {
     GtkWidget *notebook = gtk_notebook_new();
     gtk_widget_set_vexpand(notebook, TRUE);
 
+    widgets->compression.statistics = &widgets->statistics;
+    widgets->decompression.statistics = &widgets->statistics;
+
     // Compresión
     GtkWidget *compression_page = create_compression_page(&widgets->compression);
 
@@ -604,7 +791,7 @@ void create_main_window(GtkApplication *app, gpointer user_data) {
 
 
     // Estadísticas
-    GtkWidget *statistics_page = create_statistics_page();
+    GtkWidget *statistics_page = create_statistics_page(&widgets->statistics);
 
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), statistics_page,
         gtk_label_new("Estadísticas"));
