@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 
 RANKING_URL = "https://www.gutenberg.org/browse/scores/top"
+DEFAULT_OUTPUT = Path(__file__).resolve().parent.parent / "data" / "gutenberg"
 USER_AGENT = "gutenberg-top30-downloader/1.0"
 BOOK_URL_RE = re.compile(r"^/ebooks/(\d+)(?:$|[?#])")
 
@@ -127,7 +128,7 @@ def download_books(output_dir: Path, limit: int, delay: float) -> tuple[int, int
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("-o", "--output", type=Path, default=Path("gutenberg_txt"))
+    parser.add_argument("-o", "--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("-n", "--limit", type=int, default=100)
     parser.add_argument("--delay", type=float, default=0.2, help="segundos entre descargas")
     args = parser.parse_args()

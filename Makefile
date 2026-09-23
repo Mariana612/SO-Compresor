@@ -1,28 +1,35 @@
 CC      = gcc
-CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic -I Code/Commons
+CFLAGS  = -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -pedantic -I src/common
 LDLIBS  = -lcrypto
+BIN     = bin
 
-COMMONS = Code/Commons/Cli.c Code/Commons/Codec.c Code/Commons/HuffmanTree.c \
-          Code/Commons/MD5Utils.c Code/Commons/FileList.c \
-          Code/Commons/Stats.c
-HEADERS = $(wildcard Code/Commons/*.h)
+COMMON  = $(wildcard src/common/*.c)
+HEADERS = $(wildcard src/common/*.h)
 
-.PHONY: all serial fork pthread clean
+.PHONY: all serial fork pthread gui clean
 
 all: serial fork pthread
 
-serial: huffman-serial
-fork: huffman-fork
-pthread: huffman-pthread
+serial: $(BIN)/huffman-serial
+fork: $(BIN)/huffman-fork
+pthread: $(BIN)/huffman-pthread
+gui: $(BIN)/interfaz
 
-huffman-serial: $(wildcard Code/Serial/*.c Code/Serial/*.h) $(COMMONS) $(HEADERS)
-	$(CC) $(CFLAGS) -o $@ Code/Serial/*.c $(COMMONS) $(LDLIBS)
+$(BIN)/huffman-serial: $(wildcard src/serial/*.c src/serial/*.h) $(COMMON) $(HEADERS) | $(BIN)
+	$(CC) $(CFLAGS) -o $@ src/serial/*.c $(COMMON) $(LDLIBS)
 
-huffman-fork: $(wildcard Code/Fork/*.c Code/Fork/*.h) $(COMMONS) $(HEADERS)
-	$(CC) $(CFLAGS) -o $@ Code/Fork/*.c $(COMMONS) $(LDLIBS)
+$(BIN)/huffman-fork: $(wildcard src/fork/*.c src/fork/*.h) $(COMMON) $(HEADERS) | $(BIN)
+	$(CC) $(CFLAGS) -o $@ src/fork/*.c $(COMMON) $(LDLIBS)
 
-huffman-pthread: $(wildcard Code/Pthread/*.c Code/Pthread/*.h) $(COMMONS) $(HEADERS)
-	$(CC) $(CFLAGS) -pthread -o $@ Code/Pthread/*.c $(COMMONS) $(LDLIBS)
+$(BIN)/huffman-pthread: $(wildcard src/pthread/*.c src/pthread/*.h) $(COMMON) $(HEADERS) | $(BIN)
+	$(CC) $(CFLAGS) -pthread -o $@ src/pthread/*.c $(COMMON) $(LDLIBS)
+
+# Interfaz gráfica (GTK 4)
+$(BIN)/interfaz: $(wildcard src/gui/*.c src/gui/*.h) | $(BIN)
+	$(CC) -O2 -Wall -Wextra -o $@ src/gui/*.c $$(pkg-config --cflags --libs gtk4)
+
+$(BIN):
+	mkdir -p $@
 
 clean:
-	rm -f huffman-serial huffman-fork huffman-pthread
+	rm -f $(BIN)/huffman-serial $(BIN)/huffman-fork $(BIN)/huffman-pthread $(BIN)/interfaz

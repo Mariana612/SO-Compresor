@@ -1,6 +1,6 @@
 #include "Decompressor.h"
 #include "ProcessPool.h"
-#include "../Commons/Codec.h"
+#include "../common/Codec.h"
 #include <stdlib.h>
 
 // ============================================================

@@ -1,6 +1,6 @@
 #include "Compressor.h"
-#include "../Commons/Codec.h"
-#include "../Commons/FileList.h"
+#include "../common/Codec.h"
+#include "../common/FileList.h"
 
 #include <stdlib.h>
 

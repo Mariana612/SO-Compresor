@@ -1,5 +1,5 @@
 #include "Decompressor.h"
-#include "../Commons/Codec.h"
+#include "../common/Codec.h"
 
 #include <stdlib.h>
 

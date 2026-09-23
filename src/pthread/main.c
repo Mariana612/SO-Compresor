@@ -1,6 +1,6 @@
 #include "Compressor.h"
 #include "Decompressor.h"
-#include "../Commons/Cli.h"
+#include "../common/Cli.h"
 
 int main(int argc, char *argv[])
 {

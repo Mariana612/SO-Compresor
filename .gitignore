@@ -2,10 +2,7 @@
 *.huff
 
 # Binarios
-huffman
-huffman-*
-interfaz
-Interfaz/compresor
+bin/
 
 # Python
 __pycache__/

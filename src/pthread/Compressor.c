@@ -1,14 +1,14 @@
 #include "Compressor.h"
-#include "ProcessPool.h"
-#include "../Commons/Codec.h"
-#include "../Commons/FileList.h"
-#include <stdlib.h>
+#include "ThreadPool.h"
+#include "../common/Codec.h"
+#include "../common/FileList.h"
 
 // ============================================================
 // ESTRUCTURAS DE DATOS
 // ============================================================
 
-// Lo que necesitan los hijos. Cada hijo recibe una copia al hacer fork()
+// Lo que comparten los hilos. La tabla `entries` vive en memoria compartida:
+// en la fase 1 cada hilo escribe ahí los metadatos de su archivo.
 typedef struct {
     char **paths;
     const char *archive;
@@ -17,22 +17,20 @@ typedef struct {
 
 
 // ============================================================
-// TAREAS DE LOS HIJOS
+// TAREAS DE LOS HILOS
 // ============================================================
 
-// Fase 1 - El hijo analiza su archivo y le manda al padre la ArchiveEntry
-// completa (MD5, frecuencias y tamaños) por la pipe
-static int analyze_task(size_t index, void *context, void *result)
+// Fase 1 - MD5, frecuencias y tamaño comprimido, directo en la tabla compartida
+static int analyze_task(size_t index, void *context)
 {
     CompressJob *job = context;
-    return codec_analyze_file(job->paths[index], result);
+    return codec_analyze_file(job->paths[index], &job->entries[index]);
 }
 
-// Fase 2 - El hijo escribe los datos comprimidos de su archivo en su región del .huff
-static int encode_task(size_t index, void *context, void *result)
+// Fase 2 - Datos comprimidos en la región del .huff que le toca al archivo
+static int encode_task(size_t index, void *context)
 {
     CompressJob *job = context;
-    (void)result;
     return codec_encode_file(job->paths[index], job->archive, &job->entries[index]);
 }
 
@@ -41,29 +39,31 @@ static int encode_task(size_t index, void *context, void *result)
 // FUNCIONES PRINCIPALES
 // ============================================================
 
-// Comprimir directorio - Reparte los archivos entre varios procesos hijos
+// Comprimir directorio - Reparte los archivos entre varios hilos
 int compress_directory(const char *directory, const char *archive, RunStats *stats)
 {
     FileList files;
     CompressJob job;
+    size_t table_size;
     int success;
 
     if (!file_list_load(directory, 0, &files))
         return 0;
 
+    // Tabla de metadatos en memoria compartida
+    table_size = files.count * sizeof(ArchiveEntry);
     job.paths = files.paths;
     job.archive = archive;
-    job.entries = calloc(files.count > 0 ? files.count : 1, sizeof(ArchiveEntry));
+    job.entries = shared_memory_create(table_size);
     if (job.entries == NULL) {
         file_list_free(&files);
         return 0;
     }
 
-    // Fase 1 en paralelo: los metadatos llegan al padre por las pipes
-    success = process_pool_run(files.count, analyze_task, &job, job.entries,
-                               sizeof(ArchiveEntry)) == files.count;
+    // Fase 1 en paralelo
+    success = thread_pool_run(files.count, analyze_task, &job) == files.count;
 
-    // El padre arma la tabla y la escribe al inicio del .huff
+    // Tabla al inicio del .huff
     if (success) {
         stats->files = files.count;
         stats->original_bytes = codec_total_size(job.entries, files.count);
@@ -71,11 +71,11 @@ int compress_directory(const char *directory, const char *archive, RunStats *sta
         success = codec_write_header(archive, job.entries, files.count);
     }
 
-    // Fase 2 en paralelo: los hijos heredan la tabla con los offsets ya asignados
+    // Fase 2 en paralelo
     if (success)
-        success = process_pool_run(files.count, encode_task, &job, NULL, 0) == files.count;
+        success = thread_pool_run(files.count, encode_task, &job) == files.count;
 
-    free(job.entries);
+    shared_memory_destroy(job.entries, table_size);
     file_list_free(&files);
     return success;
 }

@@ -21,13 +21,27 @@ sudo apt-get install build-essential
 sudo apt-get install libssl-dev
 ```
 
+## Estructura
+
+```
+src/common/    código compartido (Huffman, MD5, formato .huff, CLI, estadísticas)
+src/serial/    variante serial
+src/fork/      variante paralela con fork() + pipes
+src/pthread/   variante concurrente con pthread + memoria compartida
+src/gui/       interfaz gráfica (GTK 4)
+scripts/       descarga de los libros y limpieza de .huff (ver scripts/README.md)
+data/gutenberg/  los 100 libros .txt del top de Gutenberg (últimos 30 días)
+bin/           binarios generados por make (no se versiona)
+```
+
 ## Compilar
 
 Desde la raíz del proyecto:
 
 ```bash
-make            # las tres variantes: huffman-serial, huffman-fork, huffman-pthread
+make            # las tres variantes en bin/: huffman-serial, huffman-fork, huffman-pthread
 make fork       # solo una variante (serial, fork o pthread)
+make gui        # interfaz gráfica en bin/interfaz (requiere libgtk-4-dev)
 make clean
 ```
 
@@ -37,12 +51,19 @@ Las tres variantes aceptan los mismos argumentos y generan exactamente el mismo
 `.huff`, así que lo que comprime una lo puede descomprimir cualquiera de las otras.
 
 ```bash
-./huffman-serial c <directorio> [archivo.huff]
-./huffman-serial d <archivo.huff> <directorio_salida>
+bin/huffman-serial c <directorio> [archivo.huff]
+bin/huffman-serial d <archivo.huff> <directorio_salida>
 ```
 
 Si no se indica el nombre del `.huff`, se usa `<directorio>.huff` al lado del
 directorio. El directorio de salida se crea si no existe.
+
+```bash
+bin/huffman-serial c data/gutenberg           # crea data/gutenberg.huff
+bin/huffman-serial d data/gutenberg.huff salida_serial
+```
+
+`python3 scripts/limpiar_huff.py` borra los `.huff` generados dentro de `data/`.
 
 ## Estadísticas
 
@@ -63,15 +84,7 @@ variante=fork operacion=d archivos=100 verificados=100 salud=100.00 original=822
 
 La aceleración respecto a la serial necesita los tiempos de dos corridas, así que
 se calcula con `stats_speedup_percent(tiempo_serial, tiempo)` de
-`Code/Commons/Stats.h`: `(Ts / T - 1) x 100` (el doble de rápido = 100 %).
-
-```bash
-./huffman-serial c Eliminar/gutenberg_txt           # crea Eliminar/gutenberg_txt.huff
-./huffman-serial d Eliminar/gutenberg_txt.huff Eliminar/gutenberg_txt_serial
-```
-
-La carpeta `Eliminar/gutenberg_txt` contiene los 100 documentos `.txt` (ver
-`Eliminar/Readme-Scraper.md`). `Eliminar/Eliminar_txt.py` borra los `.huff` generados.
+`src/common/Stats.h`: `(Ts / T - 1) x 100` (el doble de rápido = 100 %).
 
 ## Formato del archivo `.huff` (HUF3)
 
@@ -94,7 +107,7 @@ y verifica su MD5.
 
 ## Código compartido
 
-`Code/Commons` contiene todo lo común:
+`src/common` contiene todo lo común:
 - `HuffmanTree`: árbol y códigos de Huffman.
 - `MD5Utils`: MD5 con la API EVP de OpenSSL.
 - `FileList`: listado de los archivos de un directorio.
@@ -102,16 +115,16 @@ y verifica su MD5.
 - `Cli`: argumentos y medición de tiempo.
 - `Stats`: salud, aceleración e impresión de las estadísticas.
 
-Las carpetas `Serial`, `Fork` y `Pthread` solo contienen su forma de repartir
+Las carpetas `serial`, `fork` y `pthread` solo contienen su forma de repartir
 el trabajo.
 
 ## Variante serial
 
-`Code/Serial` procesa los archivos uno por uno.
+`src/serial` procesa los archivos uno por uno.
 
 ## Variante paralela con fork
 
-`Code/Fork/ProcessPool.c` crea un proceso hijo por archivo, con a lo sumo un
+`src/fork/ProcessPool.c` crea un proceso hijo por archivo, con a lo sumo un
 hijo por procesador (máximo 64) trabajando a la vez. El padre recoge con
 `waitpid(-1)` al primer hijo que termine, así que un archivo grande no frena el
 lanzamiento de nuevos hijos.
@@ -126,7 +139,7 @@ La comunicación entre procesos (IPC) se hace con una **pipe por hijo**:
 
 ## Variante concurrente con pthread
 
-`Code/Pthread/ThreadPool.c` crea un hilo por procesador (máximo 64). Los hilos
+`src/pthread/ThreadPool.c` crea un hilo por procesador (máximo 64). Los hilos
 toman trabajo de una cola ubicada en una **región de memoria compartida creada con
 `mmap`** y protegida por un mutex de `pthread`. En la compresión, la tabla de
 metadatos también vive en memoria compartida: cada hilo escribe ahí la entrada de
