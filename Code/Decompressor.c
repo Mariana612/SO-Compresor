@@ -10,12 +10,19 @@
 
 #define MAGIC "HUF2"
 
+/* ============================================================
+   LEER UN ARCHIVO
+   ============================================================ */
+
+
+// ESTRUCTURAS DE DATOS ---------------------------------------
 typedef struct {
     FILE *file;
     unsigned char buffer;
     int bits;
 } BitReader;
 
+// FUNCIONES AUXILIARES ---------------------------------------
 static int read_uint64(FILE *file, uint64_t *value)
 {
     uint64_t result = 0;
@@ -69,6 +76,12 @@ static int output_name(const char *compressed_filename, const char *output_direc
     return 1;
 }
 
+
+/* ============================================================
+   DESCOMPRIMIR
+   ============================================================ */
+
+   // FUNCIONES PRINCIPALES ---------------------------------------
 int decompress_file(const char *compressed_filename, const char *output_directory)
 {
     FILE *input = fopen(compressed_filename, "rb");

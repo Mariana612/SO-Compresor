@@ -1,13 +1,16 @@
 #include "HuffmanTree.h"
-
 #include <stdlib.h>
 #include <string.h>
 
+
+
+// ESTRUCTURAS DE DATOS ---------------------------------------
 typedef struct {
     HuffmanNode **nodes;
     int size;
 } MinHeap;
 
+// FUNCIONES AUXILIARES ---------------------------------------
 int huffman_is_leaf(const HuffmanNode *node)
 {
     return node != NULL && node->left == NULL && node->right == NULL;
@@ -90,6 +93,7 @@ void huffman_free_tree(HuffmanNode *root)
     free(root);
 }
 
+// FUNCIONES PRINCIPALES ---------------------------------------
 HuffmanNode *huffman_build_tree(const uint64_t frequencies[HUFFMAN_SYMBOLS])
 {
     MinHeap heap = { malloc(sizeof(*heap.nodes) * HUFFMAN_SYMBOLS), 0 };

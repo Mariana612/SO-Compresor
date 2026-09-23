@@ -1,5 +1,4 @@
 #include "Compressor.h"
-
 #include "HuffmanTree.h"
 #include "MD5Utils.h"
 
@@ -13,11 +12,21 @@
 #define BUFFER_SIZE (1024 * 1024)
 #define MAGIC "HUF2"
 
+/* ============================================================
+   ESCRIBIR EN ARCHIVO
+   ============================================================ */
+
+
+// ESTRUCTURAS DE DATOS ---------------------------------------
+
 typedef struct {
     FILE *file;
     unsigned char buffer;
     int bits;
 } BitWriter;
+
+
+// FUNCIONES AUXILIARES ---------------------------------------
 
 static void bitwriter_init(BitWriter *writer, FILE *file)
 {
@@ -67,6 +76,12 @@ static int write_uint64(FILE *file, uint64_t value)
     return 1;
 }
 
+
+/* ============================================================
+   COMPRIMIR
+   ============================================================ */
+
+// FUNCIONES AUXILIARES ---------------------------------------
 static int count_frequencies(const char *filename, uint64_t frequencies[HUFFMAN_SYMBOLS],
                              uint64_t *total_bytes)
 {
@@ -96,6 +111,7 @@ static int count_frequencies(const char *filename, uint64_t frequencies[HUFFMAN_
     return 1;
 }
 
+// FUNCIONES PRINCIPALES ---------------------------------------
 static int compress_file(const char *filename)
 {
     uint64_t frequencies[HUFFMAN_SYMBOLS], original_size;
@@ -106,10 +122,12 @@ static int compress_file(const char *filename)
     FILE *input = NULL, *output = NULL;
     int symbol;
 
+    // Calcula la firma y la frecuencia de cada símbolo del archivo original.
     if (!calculate_md5(filename, md5) ||
         !count_frequencies(filename, frequencies, &original_size))
         return 0;
 
+    // El archivo comprimido conserva el nombre original y la extensión .huff.
     md5_to_hex(md5, md5_hex);
     printf("\nArchivo: %s\nMD5: %s\n", filename, md5_hex);
     snprintf(output_filename, sizeof(output_filename), "%s.huff", filename);
@@ -119,6 +137,7 @@ static int compress_file(const char *filename)
         return 0;
     }
 
+    // Formato
     if (fwrite(MAGIC, 1, 4, output) != 4 || !write_uint64(output, original_size) ||
         fwrite(md5, 1, MD5_DIGEST_LENGTH, output) != MD5_DIGEST_LENGTH) {
         fclose(output);
@@ -136,12 +155,15 @@ static int compress_file(const char *filename)
         return 1;
     }
 
+    // Crear Arbol
     root = huffman_build_tree(frequencies);
     if (root == NULL) {
         fclose(output);
         return 0;
     }
     huffman_generate_codes(root, codes);
+
+    // Escribir archivo
     input = fopen(filename, "rb");
     if (input == NULL) {
         perror(filename);
@@ -161,6 +183,8 @@ static int compress_file(const char *filename)
         }
         bitwriter_flush(&writer);
     }
+
+    // Cerrar archivos
     fclose(input);
     fclose(output);
     huffman_free_tree(root);
@@ -195,3 +219,5 @@ int compress_directory(const char *directory)
     closedir(dir);
     return success;
 }
+
+
