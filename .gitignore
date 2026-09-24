@@ -1,8 +1,5 @@
 # Archivos comprimidos
 *.huff
 
-# Binarios
-bin/
-
 # Python
 __pycache__/
